@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Scrub",
+  "version": "0.1.0",
+  "description": "Adds speed control and a scrubber to Instagram videos.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.instagram.com/*",
+        "https://instagram.com/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
