@@ -11,7 +11,11 @@ Scrub is fully client-side and collects or transmits no data.
 
 ## Status
 
-**Phase 0** — extension scaffold + video detection. No UI yet.
+**Phase 2** — speed-control pill plus left/right tap zones on every video.
+Tap a side zone to skip ±5s (stacks within ~800ms); press and hold for 2×
+forward or reverse boost. IG's overlay chrome (caption, mute, follow) fades
+during a boost on Home/Reels. Scrub is disabled entirely on Stories; on
+post-detail (`/p/<id>/`) the column UI stays put.
 
 ## Load the unpacked extension
 
