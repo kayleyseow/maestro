@@ -11,8 +11,16 @@
 
   const TRACKED_ATTR = "data-scrub-tracked";
   const SPEED_PRESETS = [0.5, 1, 1.25, 1.5, 1.75, 2];
-  // Tinted/outlined zone overlays — flip to true while debugging zone bounds.
-  const SHOW_ZONE_DEBUG = true;
+
+  // Single global debug toggle. Flip to true to enable:
+  //   - Every console.* log Scrub emits ([Scrub] track/visibility/boost,
+  //     [Scrub debug] pointer events, etc.).
+  //   - Red/blue tint + dashed outlines on the left/right tap zones.
+  //   - Extra pointerdown logger that reports what element each press hits.
+  // dlog is a direct binding to console.debug when DEBUG is on, and a
+  // no-op otherwise — call sites pay nothing when shipping.
+  const DEBUG = false;
+  const dlog = DEBUG ? console.debug.bind(console) : () => {};
 
   // Scope: feed posts, Explore, and Reels only — Stories are out per
   // product scope (see README). IG's Stories URLs all live under /stories/.
@@ -310,7 +318,7 @@
     const zoneLeft = shadow.querySelector(".zone.left");
     const zoneRight = shadow.querySelector(".zone.right");
     const boostBadge = shadow.querySelector(".boost-badge");
-    if (SHOW_ZONE_DEBUG) {
+    if (DEBUG) {
       zoneLeft.classList.add("debug");
       zoneRight.classList.add("debug");
     }
@@ -352,7 +360,7 @@
       video.currentTime = next;
       if (video.paused) video.play().catch(() => {});
       if (stepBackFrames < 3 || stepBackFrames % 30 === 0) {
-        console.debug(
+        dlog(
           "[Scrub] stepBack frame", stepBackFrames,
           "dt", dt.toFixed(4),
           "before", before.toFixed(3),
@@ -464,7 +472,7 @@
 
     function enterBoost(mode) {
       if (boostMode) return;
-      console.debug("[Scrub] enterBoost", mode, "wasPlaying", !video.paused, "t", video.currentTime.toFixed(3), "rate", video.playbackRate);
+      dlog("[Scrub] enterBoost", mode, "wasPlaying", !video.paused, "t", video.currentTime.toFixed(3), "rate", video.playbackRate);
       boostMode = mode;
       boostOriginalRate = video.playbackRate;
       boostWasPlaying = !video.paused;
@@ -672,9 +680,7 @@
       const visible = isVideoVisible(rect);
       const blockedModal = isBlockedByOtherModal();
       if (!visible || blockedModal) {
-        if (SHOW_ZONE_DEBUG) {
-          console.debug("[Scrub debug] pointerdown REJECTED — visible:", visible, "blockedModal:", blockedModal);
-        }
+        dlog("[Scrub debug] pointerdown REJECTED — visible:", visible, "blockedModal:", blockedModal);
         return;
       }
 
@@ -682,23 +688,21 @@
       if (pointInZone(e.clientX, e.clientY, zoneLeft)) mode = "rev";
       else if (pointInZone(e.clientX, e.clientY, zoneRight)) mode = "fwd";
       if (!mode) {
-        if (SHOW_ZONE_DEBUG) {
-          console.debug(
-            "[Scrub debug] pointerdown NOT IN ZONE — pt:", e.clientX, e.clientY,
-            "zoneL:", zoneLeft.getBoundingClientRect(),
-            "zoneR:", zoneRight.getBoundingClientRect(),
-            "videoRect:", rect
-          );
-        }
+        dlog(
+          "[Scrub debug] pointerdown NOT IN ZONE — pt:", e.clientX, e.clientY,
+          "zoneL:", zoneLeft.getBoundingClientRect(),
+          "zoneR:", zoneRight.getBoundingClientRect(),
+          "videoRect:", rect
+        );
         return;
       }
 
       // Don't take the press if it's actually over an IG button, link, or
       // other non-video chrome that happens to overlap the zone.
       if (!isPressOnVideo(e.clientX, e.clientY, rect)) {
-        if (SHOW_ZONE_DEBUG) {
+        if (DEBUG) {
           const top = topElementBelowHost(e.clientX, e.clientY);
-          console.debug(
+          dlog(
             "[Scrub debug] pointerdown REJECTED (not on video) — mode:", mode,
             "top:", top,
             "interactive ancestor:", top && top.closest('a, button, [role="button"]')
@@ -707,9 +711,7 @@
         return;
       }
 
-      if (SHOW_ZONE_DEBUG) {
-        console.debug("[Scrub debug] pointerdown CLAIMED — mode:", mode, "pointerType:", e.pointerType, "URL:", location.pathname);
-      }
+      dlog("[Scrub debug] pointerdown CLAIMED — mode:", mode, "pointerType:", e.pointerType, "URL:", location.pathname);
 
       setOpen(false);
 
@@ -811,8 +813,8 @@
     window.addEventListener("pointerdown", onZoneDocDown, true);
 
     // Capture-phase logger that prints any pointerdown landing inside our
-    // host's rect — what element/path the press actually hit. Gated on
-    // SHOW_ZONE_DEBUG so it doesn't ship to production.
+    // host's rect — what element/path the press actually hit. Gated on DEBUG
+    // so it doesn't ship to production.
     function onDocDownDebug(e) {
       const r = host.getBoundingClientRect();
       if (e.clientX < r.left || e.clientX > r.right) return;
@@ -828,14 +830,14 @@
             }`
           : String(n)
       );
-      console.debug(
+      dlog(
         "[Scrub debug] pointerdown @",
         `${xPct}% x ${yPct}% of host`,
         "target=", e.target,
         "path[0..5]=", path
       );
     }
-    if (SHOW_ZONE_DEBUG) {
+    if (DEBUG) {
       document.addEventListener("pointerdown", onDocDownDebug, true);
     }
 
@@ -929,8 +931,8 @@
       if (!visible || blockedModal) {
         host.style.display = "none";
         setOpen(false);
-        if (SHOW_ZONE_DEBUG && lastVisibilityState !== "hidden") {
-          console.debug(
+        if (DEBUG && lastVisibilityState !== "hidden") {
+          dlog(
             "[Scrub debug] host HIDDEN — visible:", visible,
             "blockedModal:", blockedModal,
             "rect:", rect,
@@ -949,8 +951,8 @@
       const offset = headerOverlapPx(rect);
       pill.style.top = `${8 + offset}px`;
 
-      if (SHOW_ZONE_DEBUG && lastVisibilityState !== "shown") {
-        console.debug("[Scrub debug] host SHOWN — rect:", rect, "URL:", location.pathname);
+      if (DEBUG && lastVisibilityState !== "shown") {
+        dlog("[Scrub debug] host SHOWN — rect:", rect, "URL:", location.pathname);
         lastVisibilityState = "shown";
       }
     }
@@ -1048,7 +1050,7 @@
       if (videos.has(video) && uiByVideo.has(video)) {
         return;
       }
-      console.debug("[Scrub] track: stale TRACKED_ATTR on reused element — re-tracking", video);
+      dlog("[Scrub] track: stale TRACKED_ATTR on reused element — re-tracking", video);
       video.removeAttribute(TRACKED_ATTR);
     }
     if (isStoriesPage()) return;
@@ -1056,7 +1058,7 @@
     videos.add(video);
     const ui = mountSpeedUI(video);
     if (ui) uiByVideo.set(video, ui);
-    console.debug("[Scrub] video found", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
+    dlog("[Scrub] video found", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
   }
 
   function untrack(video) {
@@ -1075,7 +1077,7 @@
     // Always clear the attribute so a re-insertion of the same element
     // (which IG/React can do during SPA navigation) gets freshly tracked.
     if (video.hasAttribute(TRACKED_ATTR)) video.removeAttribute(TRACKED_ATTR);
-    console.debug("[Scrub] video removed", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
+    dlog("[Scrub] video removed", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
   }
 
   /** Find every <video> in a subtree (including the root itself). */
@@ -1184,5 +1186,5 @@
   });
   dialogMountObserver.observe(document.documentElement, { childList: true, subtree: true });
 
-  console.info("[Scrub] content script loaded — watching for videos.");
+  dlog("[Scrub] content script loaded — watching for videos.");
 })();
