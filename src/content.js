@@ -22,6 +22,19 @@
   const DEBUG = false;
   const dlog = DEBUG ? console.debug.bind(console) : () => {};
 
+  // Auto-skip promoted reels on the Reels feed when the promoted video
+  // starts playing. Flip off to disable. Other promoted surfaces (Home
+  // sponsored posts, Explore sponsored thumbs) don't have a clean per-item
+  // "next" navigation so we don't auto-skip there — only Reels.
+  const AUTO_SKIP_PROMOTED = true;
+  // Randomized delay (ms) before triggering the skip. A tiny pause makes the
+  // pattern look less robotic than instant-jump. Kept short because IG
+  // sometimes auto-advances promoted reels on its own after ~500ms — if we
+  // wait longer than that, our skip fires after IG already moved on and the
+  // DOM has changed underneath us.
+  const PROMOTED_SKIP_DELAY_MIN_MS = 100;
+  const PROMOTED_SKIP_DELAY_MAX_MS = 250;
+
   // Scope: feed posts, Explore, and Reels only — Stories are out per
   // product scope (see README). IG's Stories URLs all live under /stories/.
   function isStoriesPage() {
@@ -35,6 +48,136 @@
   // a skip the way we do on Home/Reels where chrome overlays the video.
   function isPostDetailPage() {
     return /(^|\/)p\/[^/]+/.test(location.pathname);
+  }
+
+  // Reels feed URLs (/reels/<id>/, /reels/) — the surface where the
+  // "Navigate to next Reel" button exists. Single-reel permalinks like
+  // /<user>/reel/<id>/ don't have that button, so auto-skip is no-op there.
+  function isReelsFeedPage() {
+    return /^\/reels(\/|$)/.test(location.pathname);
+  }
+
+  // Detect whether the reel containing `video` is promoted.
+  //
+  // Two signals, either one is sufficient:
+  //   1. An <a> with href containing "/ads/ig_redirect/" — IG's tracked
+  //      redirect endpoint for promoted content. Server-side route, very
+  //      stable. (URL path is IG's, not ours.)
+  //   2. A span whose textContent is exactly "Ad" — IG's disclosure badge
+  //      string. Always present on promoted Reels. (Text is IG's, not ours.)
+  //
+  // We walk up from the video element to find each ancestor level. At each
+  // level we query for the signals scoped to that ancestor. If the ancestor
+  // contains more than one <video>, we've walked past this reel's container
+  // (into siblings) and we bail to avoid false positives from neighbouring
+  // promoted reels in the carousel.
+  function isPromotedReel(video) {
+    let cur = video.parentElement;
+    let hops = 0;
+    while (cur && cur !== document.body && hops < 25) {
+      if (cur.querySelectorAll("video").length > 1) return false;
+      if (cur.querySelector('a[href*="/ads/ig_redirect/"]')) return true;
+      const spans = cur.querySelectorAll("span");
+      for (const s of spans) {
+        if (s.children.length === 0 && s.textContent && s.textContent.trim() === "Ad") {
+          return true;
+        }
+      }
+      cur = cur.parentElement;
+      hops++;
+    }
+    return false;
+  }
+
+  // Walk up from `video` to the outermost ancestor that's still "this reel
+  // only" — i.e., doesn't contain any other <video> elements. That ancestor
+  // is the per-reel item container (a sibling of other reels in the feed).
+  // Used by hidePromotedReel to know which subtree to black out.
+  function findReelItemContainer(video) {
+    let cur = video.parentElement;
+    let last = cur;
+    while (cur && cur !== document.body) {
+      if (cur.querySelectorAll("video").length > 1) break;
+      last = cur;
+      cur = cur.parentElement;
+    }
+    return last;
+  }
+
+  // Make the promoted reel's container visually invisible AND silence the
+  // video, while preserving its layout box. `visibility: hidden` keeps the
+  // element's height in flow so scroll-snap math (clickNextReel Strategy 2)
+  // still computes correct viewport offsets — using `display: none` would
+  // collapse the height and shift everything below it, potentially
+  // confusing IG's carousel.
+  //
+  // muted + volume:0 belt-and-suspenders: setting both means even if IG
+  // unmutes via DOM property or volume change as part of its playback
+  // logic, the other one keeps the audio at 0. Practically: the user gets
+  // no audio at all during the brief delay before scroll.
+  function hidePromotedReel(video) {
+    try {
+      video.muted = true;
+      video.volume = 0;
+    } catch (e) {
+      // muted/volume can throw in rare permissions-restricted contexts; ignore.
+    }
+    const container = findReelItemContainer(video);
+    if (container && container !== document.body) {
+      container.style.visibility = "hidden";
+      dlog("[Scrub] promoted-skip: blanked + muted promoted reel container", container);
+    }
+  }
+
+  // Advance the Reels feed past the current reel. Tries three strategies
+  // in order — button click, scroll-snap by viewport, ArrowDown keydown —
+  // because the next-reel button is only mounted while the user is hovering
+  // the Reels area, so Strategy 1 silently fails when auto-skip fires
+  // headlessly.
+  function clickNextReel() {
+    // Strategy 1: click the next-reel button. Works when the user's cursor
+    // is over the Reels area (IG mounts the button on hover).
+    const btn =
+      document.querySelector('[aria-label="Navigate to next Reel"]') ||
+      document.querySelector('[aria-label*="next reel" i]') ||
+      document.querySelector('[aria-label*="next" i][role="button"]');
+    if (btn) {
+      dlog("[Scrub] promoted-skip: clicking next-reel button", btn);
+      btn.click();
+      return;
+    }
+
+    // Strategy 2: scroll the Reels carousel by one viewport. IG Reels uses
+    // CSS scroll-snap, so scrolling by `clientHeight` snaps to the next
+    // item. This works regardless of whether the user is hovering.
+    const v = document.querySelector('video[data-scrub-tracked]');
+    if (v) {
+      let cur = v.parentElement;
+      while (cur && cur !== document.documentElement) {
+        if (cur.scrollHeight > cur.clientHeight + 4) {
+          const style = getComputedStyle(cur);
+          if (style.overflowY === "auto" || style.overflowY === "scroll") {
+            dlog("[Scrub] promoted-skip: scrolling reels container by", cur.clientHeight, "px", cur);
+            cur.scrollBy(0, cur.clientHeight);
+            return;
+          }
+        }
+        cur = cur.parentElement;
+      }
+    }
+
+    // Strategy 3: synthesize an ArrowDown keydown. IG binds arrow-key
+    // navigation on the Reels page. Untrusted event but worth a shot —
+    // last resort if no scroll container and no button.
+    dlog("[Scrub] promoted-skip: dispatching ArrowDown keydown");
+    document.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      code: "ArrowDown",
+      keyCode: 40,
+      which: 40,
+      bubbles: true,
+      cancelable: true,
+    }));
   }
 
   /** Live set of <video> elements Scrub currently knows about. */
@@ -969,6 +1112,48 @@
     // "resize" on HTMLVideoElement: intrinsic size changed mid-playback.
     video.addEventListener("loadedmetadata", updatePosition);
     video.addEventListener("resize", updatePosition);
+
+    // Auto-skip promoted reels.
+    //
+    // Why multiple triggers:
+    //   - `play` fires when IG calls video.play() on this reel becoming the
+    //     active item. But IG can call play() before our MutationObserver
+    //     callback finishes attaching the listener — race we can lose.
+    //   - `timeupdate` fires repeatedly during actual playback. Even if we
+    //     missed `play`, the first timeupdate is a guaranteed catch-up.
+    //   - Immediate check covers the case where the video is already mid-
+    //     playback by the time we mount (e.g. SPA re-attach of a reused
+    //     element).
+    //
+    // We also retry the detection a few times: when a reel first mounts,
+    // IG sometimes hasn't yet populated the surrounding disclosure DOM
+    // (the "Ad" badge text and ig_redirect link) inside the reel item.
+    // The first timeupdate can land before the DOM is fully decorated, so
+    // the second or third check catches it.
+    if (AUTO_SKIP_PROMOTED && isReelsFeedPage()) {
+      let promotedChecksLeft = 5;
+      let promotedActionTaken = false;
+      const maybeSkipPromoted = (trigger) => {
+        if (promotedActionTaken || promotedChecksLeft-- <= 0) return;
+        const isPromoted = isPromotedReel(video);
+        dlog("[Scrub] promoted-skip check via", trigger, "isPromoted:", isPromoted, "checksLeft:", promotedChecksLeft, video);
+        if (!isPromoted) return;
+        promotedActionTaken = true;
+        // Black out the promoted reel's container IMMEDIATELY so the user
+        // doesn't see the content during the brief delay before we scroll
+        // past it. visibility:hidden keeps the layout box so scroll-snap
+        // math stays correct (see hidePromotedReel comment).
+        hidePromotedReel(video);
+        const delay = PROMOTED_SKIP_DELAY_MIN_MS +
+          Math.random() * (PROMOTED_SKIP_DELAY_MAX_MS - PROMOTED_SKIP_DELAY_MIN_MS);
+        dlog("[Scrub] promoted-skip: reel detected, skipping in", Math.round(delay), "ms", video);
+        setTimeout(clickNextReel, delay);
+      };
+      video.addEventListener("play", () => maybeSkipPromoted("play"));
+      video.addEventListener("timeupdate", () => maybeSkipPromoted("timeupdate"));
+      if (!video.paused && video.currentTime > 0) maybeSkipPromoted("immediate");
+      dlog("[Scrub] promoted-skip: hook attached for", video.src);
+    }
 
     document.body.appendChild(host);
     updatePosition();
