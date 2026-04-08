@@ -9,7 +9,7 @@
 (() => {
   "use strict";
 
-  const TRACKED_ATTR = "data-scrub-tracked";
+  const TRACKED_ATTR = "data-Scrub-tracked";
   const SPEED_PRESETS = [0.5, 1, 1.25, 1.5, 1.75, 2];
 
   // Single global debug toggle. Flip to true to enable:
@@ -19,19 +19,19 @@
   //   - Extra pointerdown logger that reports what element each press hits.
   // dlog is a direct binding to console.debug when DEBUG is on, and a
   // no-op otherwise — call sites pay nothing when shipping.
-  const DEBUG = false;
+  const DEBUG = true;
   const dlog = DEBUG ? console.debug.bind(console) : () => {};
 
-  // Auto-skip promoted reels on the Reels feed when the promoted video
-  // starts playing. Flip off to disable. Other promoted surfaces (Home
-  // sponsored posts, Explore sponsored thumbs) don't have a clean per-item
-  // "next" navigation so we don't auto-skip there — only Reels.
+  // Reels only — other surfaces lack clean per-item "next" navigation.
   const AUTO_SKIP_PROMOTED = true;
-  // Randomized delay (ms) before triggering the skip. A tiny pause makes the
-  // pattern look less robotic than instant-jump. Kept short because IG
-  // sometimes auto-advances promoted reels on its own after ~500ms — if we
-  // wait longer than that, our skip fires after IG already moved on and the
-  // DOM has changed underneath us.
+
+  // User-tunable scrubber preferences (future settings UI will toggle these).
+  const SHOW_FRAME_PREVIEW = false;
+  // Forced on internally whenever SHOW_FRAME_PREVIEW is on.
+  const SHOW_TOTAL_TIME = false;
+
+  // Kept under ~500ms — IG sometimes auto-advances on its own after that
+  // and our skip then fires into a different DOM.
   const PROMOTED_SKIP_DELAY_MIN_MS = 100;
   const PROMOTED_SKIP_DELAY_MAX_MS = 250;
 
@@ -150,7 +150,7 @@
     // Strategy 2: scroll the Reels carousel by one viewport. IG Reels uses
     // CSS scroll-snap, so scrolling by `clientHeight` snaps to the next
     // item. This works regardless of whether the user is hovering.
-    const v = document.querySelector('video[data-scrub-tracked]');
+    const v = document.querySelector('video[data-Scrub-tracked]');
     if (v) {
       let cur = v.parentElement;
       while (cur && cur !== document.documentElement) {
@@ -325,6 +325,97 @@
           white-space: nowrap;
         }
         .boost-badge.on { opacity: 1; }
+        /* Scrubber — mobile-IG-style thin bar at the video's bottom edge.
+           14px hit zone for the cursor; inside, a 2px track that thickens
+           to 5px on hover/drag. Thumb + time label appear on hover/drag. */
+        .scrubber {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: 14px;
+          pointer-events: auto;
+          user-select: none;
+          touch-action: none;
+        }
+        .scrubber-track {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: 2px;
+          background: rgba(255, 255, 255, 0.3);
+          transition: height 150ms ease;
+          overflow: hidden;
+        }
+        .scrubber:hover .scrubber-track,
+        .scrubber.dragging .scrubber-track,
+        .scrubber.active .scrubber-track { height: 5px; }
+        .scrubber-fill {
+          height: 100%;
+          background: rgba(255, 255, 255, 0.95);
+          width: 0%;
+        }
+        .scrubber-thumb {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          width: 12px;
+          height: 12px;
+          margin-bottom: -3px;
+          border-radius: 50%;
+          background: #fff;
+          transform: translateX(-50%);
+          opacity: 0;
+          transition: opacity 150ms ease;
+          pointer-events: none;
+        }
+        .scrubber:hover .scrubber-thumb,
+        .scrubber.dragging .scrubber-thumb,
+        .scrubber.active .scrubber-thumb { opacity: 1; }
+        .scrubber-label {
+          position: absolute;
+          bottom: 16px;
+          left: 0;
+          padding: 3px 7px;
+          background: rgba(0, 0, 0, 0.72);
+          color: #fff;
+          /* IG's web font stack so the timestamp matches their mute/audio badge. */
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+          font-size: 12px;
+          font-weight: 500;
+          line-height: 1.25;
+          letter-spacing: 0;
+          font-variant-numeric: tabular-nums;
+          border-radius: 4px;
+          white-space: nowrap;
+          pointer-events: none;
+          opacity: 0;
+          transform: translateX(-50%);
+          transition: opacity 120ms ease;
+        }
+        .scrubber:hover .scrubber-label,
+        .scrubber.dragging .scrubber-label { opacity: 1; }
+        .scrubber-preview-canvas {
+          position: absolute;
+          /* Sits above the timestamp label (~22px tall + 6px gap above the 16px label-bottom). */
+          bottom: 44px;
+          left: 0;
+          /* Size driven by canvas width/height attrs (set from JS once video aspect is known). */
+          border-radius: 8px;
+          background: #000;
+          display: none;
+          opacity: 0;
+          transform: translateX(-50%);
+          pointer-events: none;
+          transition: opacity 120ms ease;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+        }
+        .scrubber.with-preview .scrubber-preview-canvas { display: block; }
+        .scrubber.with-preview:hover .scrubber-preview-canvas,
+        .scrubber.with-preview.dragging .scrubber-preview-canvas { opacity: 1; }
+        .scrubber.hidden { opacity: 0; pointer-events: none; transition: opacity 150ms ease; }
+        .scrubber.disabled { display: none; }
       </style>
       <div class="zone left"></div>
       <div class="zone right"></div>
@@ -333,6 +424,12 @@
         <div class="display"><span class="num"></span><span class="x">×</span></div>
       </div>
       <div class="boost-badge"></div>
+      <div class="scrubber">
+        <div class="scrubber-track"><div class="scrubber-fill"></div></div>
+        <div class="scrubber-thumb"></div>
+        <canvas class="scrubber-preview-canvas" width="80" height="142"></canvas>
+        <div class="scrubber-label"></div>
+      </div>
     `;
 
     const pill = shadow.querySelector(".pill");
@@ -350,6 +447,7 @@
     }
 
     function setRate(r) {
+      const prev = video.playbackRate;
       video.playbackRate = r;
       const s = String(r);
       pillNum.textContent = s;
@@ -358,6 +456,9 @@
       rowButtons.forEach((b) => {
         b.classList.toggle("active", Number(b.dataset.rate) === r);
       });
+      // Briefly emphasize the scrubber so the user can see the playhead
+      // change pace (or in the case of skipBy/boost, jump or accelerate).
+      if (r !== prev) pulseScrubberActive(600);
     }
 
     function setOpen(open) {
@@ -605,6 +706,10 @@
       }
       hiddenChrome.forEach((el) => el.classList.add("scrub-boost-hidden"));
       pill.classList.add("hidden");
+      // Scrubber stays visible during skip/boost so the user can watch the
+      // playhead jump on a skip and accelerate during 2× boost — it's the
+      // most useful real-time feedback for the very controls that change
+      // currentTime, so hiding it would defeat the purpose.
     }
 
     function showChrome() {
@@ -640,6 +745,7 @@
       }
       hideChrome();
       boostBadge.classList.add("on");
+      setScrubberPersistentActive(true);
     }
 
     function onBoostPauseFight() {
@@ -664,6 +770,7 @@
       boostMode = null;
       showChrome();
       boostBadge.classList.remove("on");
+      setScrubberPersistentActive(false);
     }
 
     function flashSkipBadge(seconds) {
@@ -688,6 +795,9 @@
       const next = Math.max(0, Math.min(dur, before + seconds));
       if (next === before) return; // at boundary — don't move, don't flash, don't stack
       video.currentTime = next;
+      // Flash the scrubber active so the user visibly sees the playhead
+      // snap to its new position.
+      pulseScrubberActive(600);
 
       // Stack consecutive same-direction taps within the window into one
       // running total (e.g. "+5s" → "+10s" → "+15s"). Direction change or
@@ -819,6 +929,14 @@
     function onZoneDocDown(e) {
       if (e.button != null && e.button !== 0) return;
       if (zoneDown || boostMode) return;
+      // The open pill (208px) extends into the right zone on compressed
+      // Reels. Our hit-test sees the video below the pill (host is skipped)
+      // and would claim the press, killing the pill's own pointerdown.
+      const pillRect = pill.getBoundingClientRect();
+      if (
+        e.clientX >= pillRect.left && e.clientX <= pillRect.right &&
+        e.clientY >= pillRect.top && e.clientY <= pillRect.bottom
+      ) return;
       const rect = video.getBoundingClientRect();
       const visible = isVideoVisible(rect);
       const blockedModal = isBlockedByOtherModal();
@@ -1155,6 +1273,219 @@
       dlog("[Scrub] promoted-skip: hook attached for", video.src);
     }
 
+    // Scrubber wiring — mobile-IG-style draggable progress bar.
+    const scrubber = shadow.querySelector(".scrubber");
+    const scrubFill = shadow.querySelector(".scrubber-fill");
+    const scrubThumb = shadow.querySelector(".scrubber-thumb");
+    const scrubLabel = shadow.querySelector(".scrubber-label");
+    const scrubPreview = shadow.querySelector(".scrubber-preview-canvas");
+    const scrubPreviewCtx = scrubPreview.getContext("2d");
+    if (SHOW_FRAME_PREVIEW) scrubber.classList.add("with-preview");
+
+    // .active = thicker bar + visible thumb during skip/rate/boost. The
+    // persistent flag prevents a pulse timer from clearing .active mid-boost.
+    let scrubberPersistentActive = false;
+    let scrubActivePulseTimer = null;
+    function pulseScrubberActive(durationMs) {
+      scrubber.classList.add("active");
+      if (scrubActivePulseTimer) clearTimeout(scrubActivePulseTimer);
+      scrubActivePulseTimer = setTimeout(() => {
+        scrubActivePulseTimer = null;
+        if (!scrubberPersistentActive) scrubber.classList.remove("active");
+      }, durationMs);
+    }
+    function setScrubberPersistentActive(on) {
+      scrubberPersistentActive = on;
+      if (on) {
+        scrubber.classList.add("active");
+      } else if (!scrubActivePulseTimer) {
+        scrubber.classList.remove("active");
+      }
+    }
+
+    function fmtTime(s) {
+      if (!isFinite(s) || s < 0) s = 0;
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return `${m}:${sec.toString().padStart(2, "0")}`;
+    }
+
+    function syncScrubberFromVideo() {
+      const dur = video.duration;
+      if (!isFinite(dur) || dur <= 0) {
+        scrubber.classList.add("disabled");
+        return;
+      }
+      scrubber.classList.remove("disabled");
+      if (scrubDragging) return;
+      const pctStr = Math.min(1, Math.max(0, video.currentTime / dur)) * 100 + "%";
+      scrubFill.style.width = pctStr;
+      scrubThumb.style.left = pctStr;
+    }
+
+    function seekFromClientX(clientX, commit) {
+      const r = scrubber.getBoundingClientRect();
+      if (r.width <= 0) return;
+      const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+      const dur = video.duration;
+      if (!isFinite(dur) || dur <= 0) return;
+      const pctStr = (pct * 100) + "%";
+      scrubFill.style.width = pctStr;
+      scrubThumb.style.left = pctStr;
+      if (commit) video.currentTime = pct * dur;
+    }
+
+    // Clamp overlay (label / preview) horizontally so its full width stays
+    // inside the scrubber — pin at the edges, follow once cursor passes
+    // the half-width threshold.
+    function positionOverlayAtPct(el, pct, scrubberWidth) {
+      const halfPct = (el.offsetWidth / 2) / scrubberWidth;
+      const clamped = Math.min(1 - halfPct, Math.max(halfPct, pct));
+      el.style.left = (clamped * 100) + "%";
+    }
+
+    // Frame preview: capture one ImageBitmap per integer second; draw the
+    // nearest cached frame on hover/drag. Bounded LRU on the cache.
+    const PREVIEW_WIDTH = 80;
+    const PREVIEW_MAX_FRAMES = 90;
+    const frameCache = new Map();
+    let lastCachedSec = -1;
+    let previewSized = false;
+    // Persisted so the async createImageBitmap resolution can redraw with
+    // the freshly cached frame instead of leaving the stale one painted.
+    let lastHoverSec = -1;
+
+    function ensurePreviewSized() {
+      if (previewSized) return;
+      if (!video.videoWidth || !video.videoHeight) return;
+      const aspect = video.videoWidth / video.videoHeight;
+      const dispH = Math.max(40, Math.round(PREVIEW_WIDTH / aspect));
+      // Bitmap at DPR for retina crispness; CSS pins visual size so layout
+      // math in positionOverlayAtPct (offsetWidth) stays predictable.
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      scrubPreview.width = Math.round(PREVIEW_WIDTH * dpr);
+      scrubPreview.height = Math.round(dispH * dpr);
+      scrubPreview.style.width = PREVIEW_WIDTH + "px";
+      scrubPreview.style.height = dispH + "px";
+      previewSized = true;
+    }
+
+    function captureFrameIfNeeded() {
+      if (!SHOW_FRAME_PREVIEW) return;
+      if (!video.videoWidth || !video.videoHeight) return;
+      if (typeof createImageBitmap !== "function") return;
+      const t = Math.floor(video.currentTime);
+      if (t === lastCachedSec) return;
+      if (frameCache.has(t)) { lastCachedSec = t; return; }
+      lastCachedSec = t;
+      ensurePreviewSized();
+      createImageBitmap(video, {
+        resizeWidth: PREVIEW_WIDTH,
+        resizeHeight: scrubPreview.height,
+        resizeQuality: "low",
+      })
+        .then(bmp => {
+          if (frameCache.size >= PREVIEW_MAX_FRAMES) {
+            const oldest = frameCache.keys().next().value;
+            const old = frameCache.get(oldest);
+            if (old && old.close) old.close();
+            frameCache.delete(oldest);
+          }
+          frameCache.set(t, bmp);
+          if (lastHoverSec >= 0) drawPreviewAt(lastHoverSec);
+        })
+        .catch(() => {});
+    }
+
+    function drawPreviewAt(hoverSec) {
+      if (!SHOW_FRAME_PREVIEW) return;
+      ensurePreviewSized();
+      if (frameCache.size === 0) return;
+      const target = Math.floor(hoverSec);
+      let bestKey = -1;
+      let bestDist = Infinity;
+      for (const k of frameCache.keys()) {
+        const d = Math.abs(k - target);
+        if (d < bestDist) { bestDist = d; bestKey = k; }
+      }
+      const bmp = frameCache.get(bestKey);
+      if (!bmp) return;
+      scrubPreviewCtx.clearRect(0, 0, scrubPreview.width, scrubPreview.height);
+      scrubPreviewCtx.drawImage(bmp, 0, 0, scrubPreview.width, scrubPreview.height);
+    }
+
+    function updateScrubLabel(clientX) {
+      const r = scrubber.getBoundingClientRect();
+      if (r.width <= 0) return;
+      const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+      const dur = video.duration;
+      if (!isFinite(dur) || dur <= 0) return;
+      const hoverSec = pct * dur;
+      const cur = fmtTime(hoverSec);
+      scrubLabel.textContent = (SHOW_TOTAL_TIME || SHOW_FRAME_PREVIEW)
+        ? `${cur} / ${fmtTime(dur)}` : cur;
+      positionOverlayAtPct(scrubLabel, pct, r.width);
+      if (SHOW_FRAME_PREVIEW) {
+        positionOverlayAtPct(scrubPreview, pct, r.width);
+        lastHoverSec = hoverSec;
+        drawPreviewAt(hoverSec);
+      }
+    }
+
+    let scrubDragging = false;
+
+    function onScrubPointerDown(e) {
+      if (e.button != null && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      scrubDragging = true;
+      scrubber.classList.add("dragging");
+      // Guarded on boostMode so a drag-end doesn't unhide chrome that boost
+      // is still managing.
+      const draggedHideChrome = !boostMode;
+      if (draggedHideChrome) hideChrome();
+      seekFromClientX(e.clientX, true);
+      updateScrubLabel(e.clientX);
+
+      function onMove(ev) {
+        seekFromClientX(ev.clientX, true);
+        updateScrubLabel(ev.clientX);
+      }
+      function onUp() {
+        scrubDragging = false;
+        scrubber.classList.remove("dragging");
+        if (draggedHideChrome && !boostMode) showChrome();
+        document.removeEventListener("pointermove", onMove, true);
+        document.removeEventListener("pointerup", onUp, true);
+        document.removeEventListener("pointercancel", onUp, true);
+      }
+      document.addEventListener("pointermove", onMove, true);
+      document.addEventListener("pointerup", onUp, true);
+      document.addEventListener("pointercancel", onUp, true);
+    }
+
+    function onScrubHoverMove(e) {
+      if (scrubDragging) return;
+      updateScrubLabel(e.clientX);
+    }
+
+    scrubber.addEventListener("pointerdown", onScrubPointerDown);
+    scrubber.addEventListener("pointermove", onScrubHoverMove);
+    video.addEventListener("timeupdate", syncScrubberFromVideo);
+    video.addEventListener("loadedmetadata", syncScrubberFromVideo);
+    video.addEventListener("durationchange", syncScrubberFromVideo);
+    if (SHOW_FRAME_PREVIEW) {
+      video.addEventListener("timeupdate", captureFrameIfNeeded);
+      // `seeked` is what catches drag-scrubbing: setting currentTime on a
+      // paused video doesn't reliably fire timeupdate but always fires seeked.
+      video.addEventListener("seeked", captureFrameIfNeeded);
+      video.addEventListener("loadedmetadata", () => {
+        previewSized = false;
+        ensurePreviewSized();
+        captureFrameIfNeeded();
+      });
+    }
+
     document.body.appendChild(host);
     updatePosition();
     setRate(1);
@@ -1206,6 +1537,11 @@
         video.removeEventListener("loadedmetadata", updatePosition);
         video.removeEventListener("resize", updatePosition);
         ro.disconnect();
+        // Home-feed virtualization churns through videos — release bitmaps.
+        for (const bmp of frameCache.values()) {
+          if (bmp && bmp.close) bmp.close();
+        }
+        frameCache.clear();
         host.remove();
       },
     };

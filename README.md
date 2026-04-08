@@ -11,11 +11,15 @@ Scrub is fully client-side and collects or transmits no data.
 
 ## Status
 
-**Phase 2** — speed-control pill plus left/right tap zones on every video.
-Tap a side zone to skip ±5s (stacks within ~800ms); press and hold for 2×
-forward or reverse boost. IG's overlay chrome (caption, mute, follow) fades
-during a boost on Home/Reels. Scrub is disabled entirely on Stories; on
-post-detail (`/p/<id>/`) the column UI stays put.
+**Phase 3** — speed-control pill, left/right tap zones, and a draggable
+scrubber at the bottom of every video. Tap a side zone to skip ±5s (stacks
+within ~800ms); press and hold for 2× forward or reverse boost; drag the
+scrubber to seek anywhere. An optional frame-preview thumbnail above the
+scrubber (gated behind `SHOW_FRAME_PREVIEW`) shows the video at the hovered
+position. Promoted reels auto-skip on the Reels feed. IG's overlay chrome
+(caption, mute, follow) fades during boost and drag-scrub. Scrub is
+disabled entirely on Stories; on post-detail (`/p/<id>/`) the column UI
+stays put.
 
 ## Load the unpacked extension
 
