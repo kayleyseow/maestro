@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Scrub",
+  "name": "Maestro",
   "version": "0.1.0",
-  "description": "Adds speed control and a scrubber to Instagram videos.",
+  "description": "Premium playback controls for Instagram videos — speed, scrubber, volume, and more.",
   "content_scripts": [
     {
       "matches": [

@@ -1,4 +1,4 @@
-// Scrub — content script
+// Maestro — content script
 // Phase 1: detect <video> elements and mount a speed-control pill onto each.
 // Per-video scope — every newly mounted video starts at 1×.
 //
@@ -9,12 +9,12 @@
 (() => {
   "use strict";
 
-  const TRACKED_ATTR = "data-Scrub-tracked";
+  const TRACKED_ATTR = "data-Maestro-tracked";
   const SPEED_PRESETS = [0.5, 1, 1.25, 1.5, 1.75, 2];
 
   // Single global debug toggle. Flip to true to enable:
-  //   - Every console.* log Scrub emits ([Scrub] track/visibility/boost,
-  //     [Scrub debug] pointer events, etc.).
+  //   - Every console.* log Maestro emits ([Maestro] track/visibility/boost,
+  //     [Maestro debug] pointer events, etc.).
   //   - Red/blue tint + dashed outlines on the left/right tap zones.
   //   - Extra pointerdown logger that reports what element each press hits.
   // dlog is a direct binding to console.debug when DEBUG is on, and a
@@ -125,7 +125,7 @@
     const container = findReelItemContainer(video);
     if (container && container !== document.body) {
       container.style.visibility = "hidden";
-      dlog("[Scrub] promoted-skip: blanked + muted promoted reel container", container);
+      dlog("[Maestro] promoted-skip: blanked + muted promoted reel container", container);
     }
   }
 
@@ -142,7 +142,7 @@
       document.querySelector('[aria-label*="next reel" i]') ||
       document.querySelector('[aria-label*="next" i][role="button"]');
     if (btn) {
-      dlog("[Scrub] promoted-skip: clicking next-reel button", btn);
+      dlog("[Maestro] promoted-skip: clicking next-reel button", btn);
       btn.click();
       return;
     }
@@ -150,14 +150,14 @@
     // Strategy 2: scroll the Reels carousel by one viewport. IG Reels uses
     // CSS scroll-snap, so scrolling by `clientHeight` snaps to the next
     // item. This works regardless of whether the user is hovering.
-    const v = document.querySelector('video[data-Scrub-tracked]');
+    const v = document.querySelector('video[data-Maestro-tracked]');
     if (v) {
       let cur = v.parentElement;
       while (cur && cur !== document.documentElement) {
         if (cur.scrollHeight > cur.clientHeight + 4) {
           const style = getComputedStyle(cur);
           if (style.overflowY === "auto" || style.overflowY === "scroll") {
-            dlog("[Scrub] promoted-skip: scrolling reels container by", cur.clientHeight, "px", cur);
+            dlog("[Maestro] promoted-skip: scrolling reels container by", cur.clientHeight, "px", cur);
             cur.scrollBy(0, cur.clientHeight);
             return;
           }
@@ -169,7 +169,7 @@
     // Strategy 3: synthesize an ArrowDown keydown. IG binds arrow-key
     // navigation on the Reels page. Untrusted event but worth a shot —
     // last resort if no scroll container and no button.
-    dlog("[Scrub] promoted-skip: dispatching ArrowDown keydown");
+    dlog("[Maestro] promoted-skip: dispatching ArrowDown keydown");
     document.dispatchEvent(new KeyboardEvent("keydown", {
       key: "ArrowDown",
       code: "ArrowDown",
@@ -180,7 +180,7 @@
     }));
   }
 
-  /** Live set of <video> elements Scrub currently knows about. */
+  /** Live set of <video> elements Maestro currently knows about. */
   const videos = new Set();
 
   // Per-video UI handle so untrack() can fully tear it down.
@@ -192,7 +192,7 @@
   // DOM because the elements we tag belong to IG, not us.
   const boostStyleTag = document.createElement("style");
   boostStyleTag.textContent = `
-    .scrub-boost-hidden {
+    .Maestro-boost-hidden {
       opacity: 0 !important;
       pointer-events: none !important;
       transition: opacity 150ms ease !important;
@@ -206,7 +206,7 @@
 
   function mountSpeedUI(video) {
     const host = document.createElement("div");
-    host.className = "scrub-speed-host";
+    host.className = "Maestro-speed-host";
     // Sized + positioned to match the video; the pill is absolute inside.
     // pointer-events: none on the host so clicks pass through to IG except
     // where the pill itself sets pointer-events: auto.
@@ -605,7 +605,7 @@
       if (video.paused) video.play().catch(() => {});
       if (stepBackFrames < 3 || stepBackFrames % 30 === 0) {
         dlog(
-          "[Scrub] stepBack frame", stepBackFrames,
+          "[Maestro] stepBack frame", stepBackFrames,
           "dt", dt.toFixed(4),
           "before", before.toFixed(3),
           "set", next.toFixed(3),
@@ -704,7 +704,7 @@
       if (hiddenChrome.length === 0) {
         hiddenChrome = collectChromeToHide();
       }
-      hiddenChrome.forEach((el) => el.classList.add("scrub-boost-hidden"));
+      hiddenChrome.forEach((el) => el.classList.add("Maestro-boost-hidden"));
       pill.classList.add("hidden");
       // Scrubber stays visible during skip/boost so the user can watch the
       // playhead jump on a skip and accelerate during 2× boost — it's the
@@ -713,14 +713,14 @@
     }
 
     function showChrome() {
-      hiddenChrome.forEach((el) => el.classList.remove("scrub-boost-hidden"));
+      hiddenChrome.forEach((el) => el.classList.remove("Maestro-boost-hidden"));
       hiddenChrome = [];
       pill.classList.remove("hidden");
     }
 
     function enterBoost(mode) {
       if (boostMode) return;
-      dlog("[Scrub] enterBoost", mode, "wasPlaying", !video.paused, "t", video.currentTime.toFixed(3), "rate", video.playbackRate);
+      dlog("[Maestro] enterBoost", mode, "wasPlaying", !video.paused, "t", video.currentTime.toFixed(3), "rate", video.playbackRate);
       boostMode = mode;
       boostOriginalRate = video.playbackRate;
       boostWasPlaying = !video.paused;
@@ -941,7 +941,7 @@
       const visible = isVideoVisible(rect);
       const blockedModal = isBlockedByOtherModal();
       if (!visible || blockedModal) {
-        dlog("[Scrub debug] pointerdown REJECTED — visible:", visible, "blockedModal:", blockedModal);
+        dlog("[Maestro debug] pointerdown REJECTED — visible:", visible, "blockedModal:", blockedModal);
         return;
       }
 
@@ -950,7 +950,7 @@
       else if (pointInZone(e.clientX, e.clientY, zoneRight)) mode = "fwd";
       if (!mode) {
         dlog(
-          "[Scrub debug] pointerdown NOT IN ZONE — pt:", e.clientX, e.clientY,
+          "[Maestro debug] pointerdown NOT IN ZONE — pt:", e.clientX, e.clientY,
           "zoneL:", zoneLeft.getBoundingClientRect(),
           "zoneR:", zoneRight.getBoundingClientRect(),
           "videoRect:", rect
@@ -964,7 +964,7 @@
         if (DEBUG) {
           const top = topElementBelowHost(e.clientX, e.clientY);
           dlog(
-            "[Scrub debug] pointerdown REJECTED (not on video) — mode:", mode,
+            "[Maestro debug] pointerdown REJECTED (not on video) — mode:", mode,
             "top:", top,
             "interactive ancestor:", top && top.closest('a, button, [role="button"]')
           );
@@ -972,7 +972,7 @@
         return;
       }
 
-      dlog("[Scrub debug] pointerdown CLAIMED — mode:", mode, "pointerType:", e.pointerType, "URL:", location.pathname);
+      dlog("[Maestro debug] pointerdown CLAIMED — mode:", mode, "pointerType:", e.pointerType, "URL:", location.pathname);
 
       setOpen(false);
 
@@ -1092,7 +1092,7 @@
           : String(n)
       );
       dlog(
-        "[Scrub debug] pointerdown @",
+        "[Maestro debug] pointerdown @",
         `${xPct}% x ${yPct}% of host`,
         "target=", e.target,
         "path[0..5]=", path
@@ -1194,7 +1194,7 @@
         setOpen(false);
         if (DEBUG && lastVisibilityState !== "hidden") {
           dlog(
-            "[Scrub debug] host HIDDEN — visible:", visible,
+            "[Maestro debug] host HIDDEN — visible:", visible,
             "blockedModal:", blockedModal,
             "rect:", rect,
             "URL:", location.pathname
@@ -1213,7 +1213,7 @@
       pill.style.top = `${8 + offset}px`;
 
       if (DEBUG && lastVisibilityState !== "shown") {
-        dlog("[Scrub debug] host SHOWN — rect:", rect, "URL:", location.pathname);
+        dlog("[Maestro debug] host SHOWN — rect:", rect, "URL:", location.pathname);
         lastVisibilityState = "shown";
       }
     }
@@ -1254,7 +1254,7 @@
       const maybeSkipPromoted = (trigger) => {
         if (promotedActionTaken || promotedChecksLeft-- <= 0) return;
         const isPromoted = isPromotedReel(video);
-        dlog("[Scrub] promoted-skip check via", trigger, "isPromoted:", isPromoted, "checksLeft:", promotedChecksLeft, video);
+        dlog("[Maestro] promoted-skip check via", trigger, "isPromoted:", isPromoted, "checksLeft:", promotedChecksLeft, video);
         if (!isPromoted) return;
         promotedActionTaken = true;
         // Black out the promoted reel's container IMMEDIATELY so the user
@@ -1264,13 +1264,13 @@
         hidePromotedReel(video);
         const delay = PROMOTED_SKIP_DELAY_MIN_MS +
           Math.random() * (PROMOTED_SKIP_DELAY_MAX_MS - PROMOTED_SKIP_DELAY_MIN_MS);
-        dlog("[Scrub] promoted-skip: reel detected, skipping in", Math.round(delay), "ms", video);
+        dlog("[Maestro] promoted-skip: reel detected, skipping in", Math.round(delay), "ms", video);
         setTimeout(clickNextReel, delay);
       };
       video.addEventListener("play", () => maybeSkipPromoted("play"));
       video.addEventListener("timeupdate", () => maybeSkipPromoted("timeupdate"));
       if (!video.paused && video.currentTime > 0) maybeSkipPromoted("immediate");
-      dlog("[Scrub] promoted-skip: hook attached for", video.src);
+      dlog("[Maestro] promoted-skip: hook attached for", video.src);
     }
 
     // Scrubber wiring — mobile-IG-style draggable progress bar.
@@ -1571,7 +1571,7 @@
       if (videos.has(video) && uiByVideo.has(video)) {
         return;
       }
-      dlog("[Scrub] track: stale TRACKED_ATTR on reused element — re-tracking", video);
+      dlog("[Maestro] track: stale TRACKED_ATTR on reused element — re-tracking", video);
       video.removeAttribute(TRACKED_ATTR);
     }
     if (isStoriesPage()) return;
@@ -1579,7 +1579,7 @@
     videos.add(video);
     const ui = mountSpeedUI(video);
     if (ui) uiByVideo.set(video, ui);
-    dlog("[Scrub] video found", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
+    dlog("[Maestro] video found", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
   }
 
   function untrack(video) {
@@ -1598,7 +1598,7 @@
     // Always clear the attribute so a re-insertion of the same element
     // (which IG/React can do during SPA navigation) gets freshly tracked.
     if (video.hasAttribute(TRACKED_ATTR)) video.removeAttribute(TRACKED_ATTR);
-    dlog("[Scrub] video removed", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
+    dlog("[Maestro] video removed", video, `(tracked: ${videos.size}, url: ${location.pathname})`);
   }
 
   /** Find every <video> in a subtree (including the root itself). */
@@ -1707,5 +1707,5 @@
   });
   dialogMountObserver.observe(document.documentElement, { childList: true, subtree: true });
 
-  dlog("[Scrub] content script loaded — watching for videos.");
+  dlog("[Maestro] content script loaded — watching for videos.");
 })();

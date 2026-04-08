@@ -1,4 +1,4 @@
-# Scrub
+# Maestro
 
 A Chrome extension that adds the video controls Instagram's web player is missing:
 
@@ -7,7 +7,7 @@ A Chrome extension that adds the video controls Instagram's web player is missin
 
 Scope (v1): feed posts and Reels. Stories are excluded.
 
-Scrub is fully client-side and collects or transmits no data.
+Maestro is fully client-side and collects or transmits no data.
 
 ## Status
 
@@ -17,7 +17,7 @@ within ~800ms); press and hold for 2× forward or reverse boost; drag the
 scrubber to seek anywhere. An optional frame-preview thumbnail above the
 scrubber (gated behind `SHOW_FRAME_PREVIEW`) shows the video at the hovered
 position. Promoted reels auto-skip on the Reels feed. IG's overlay chrome
-(caption, mute, follow) fades during boost and drag-scrub. Scrub is
+(caption, mute, follow) fades during boost and drag-Maestro. Maestro is
 disabled entirely on Stories; on post-detail (`/p/<id>/`) the column UI
 stays put.
 
@@ -27,7 +27,7 @@ stays put.
 2. Enable **Developer mode** (top-right toggle).
 3. Click **Load unpacked** and select this folder.
 4. Open [instagram.com](https://www.instagram.com), then open DevTools (F12)
-   and watch the Console — you'll see `[Scrub] video found` lines as videos
+   and watch the Console — you'll see `[Maestro] video found` lines as videos
    appear while you scroll.
 
 ## Project layout
