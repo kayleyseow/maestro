@@ -1514,8 +1514,30 @@
     }
     requestAnimationFrame(settle);
 
+    // Step ±1 preset; if current rate isn't on a preset, snap to nearest first.
+    function cycleSpeed(delta) {
+      const cur = video.playbackRate;
+      let idx = SPEED_PRESETS.indexOf(cur);
+      if (idx === -1) {
+        let nearest = 0, nd = Infinity;
+        for (let i = 0; i < SPEED_PRESETS.length; i++) {
+          const d = Math.abs(SPEED_PRESETS[i] - cur);
+          if (d < nd) { nd = d; nearest = i; }
+        }
+        idx = nearest;
+      }
+      const ni = Math.max(0, Math.min(SPEED_PRESETS.length - 1, idx + delta));
+      setRate(SPEED_PRESETS[ni]);
+    }
+
     return {
       updatePosition,
+      // Public surface for the document-level keyboard handler.
+      skipBy,
+      enterBoost,
+      exitBoost,
+      cycleSpeed,
+      resetSpeed() { setRate(1); },
       cleanup() {
         alive = false;
         if (boostHoldTimer) clearTimeout(boostHoldTimer);
@@ -1706,6 +1728,116 @@
     }
   });
   dialogMountObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Keyboard shortcuts. Target the tracked video closest to viewport center.
+  //   U / I              tap = skip ±5s, hold = 2× reverse / forward boost
+  //   Shift+U / Shift+I  skip ±10s
+  //   , / .              cycle speed preset down/up
+  //   R                  reset speed to 1×
+  const KEY_HOLD_THRESHOLD_MS = 250;
+  let activeKeyHold = null;
+
+  function isTypingInInput() {
+    const el = document.activeElement;
+    if (!el) return false;
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return true;
+    return !!el.isContentEditable;
+  }
+
+  function findKeyboardTargetVideo() {
+    if (videos.size === 0) return null;
+    if (videos.size === 1) return videos.values().next().value;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const cx = vw / 2, cy = vh / 2;
+    let best = null, bestDist = Infinity;
+    for (const v of videos) {
+      const r = v.getBoundingClientRect();
+      if (r.width <= 0 || r.bottom <= 0 || r.top >= vh) continue;
+      const dx = (r.left + r.width / 2) - cx;
+      const dy = (r.top + r.height / 2) - cy;
+      const d = dx * dx + dy * dy;
+      if (d < bestDist) { bestDist = d; best = v; }
+    }
+    return best;
+  }
+
+  function onMaestroKeyDown(e) {
+    if (e.repeat) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (isTypingInInput()) return;
+    const video = findKeyboardTargetVideo();
+    if (!video) return;
+    const handle = uiByVideo.get(video);
+    if (!handle) return;
+
+    // Speed preset cycle — match e.code so any keyboard layout works.
+    if (e.code === "Comma") {
+      e.preventDefault(); handle.cycleSpeed(-1); return;
+    }
+    if (e.code === "Period") {
+      e.preventDefault(); handle.cycleSpeed(+1); return;
+    }
+
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    switch (k) {
+      case "u":
+        e.preventDefault();
+        if (e.shiftKey) { handle.skipBy(-10); return; }
+        if (activeKeyHold) return;
+        activeKeyHold = {
+          key: "u", video, committed: null,
+          holdTimer: setTimeout(() => {
+            if (!activeKeyHold || activeKeyHold.committed) return;
+            activeKeyHold.committed = "hold";
+            handle.enterBoost("rev");
+          }, KEY_HOLD_THRESHOLD_MS),
+        };
+        break;
+      case "i":
+        e.preventDefault();
+        if (e.shiftKey) { handle.skipBy(10); return; }
+        if (activeKeyHold) return;
+        activeKeyHold = {
+          key: "i", video, committed: null,
+          holdTimer: setTimeout(() => {
+            if (!activeKeyHold || activeKeyHold.committed) return;
+            activeKeyHold.committed = "hold";
+            handle.enterBoost("fwd");
+          }, KEY_HOLD_THRESHOLD_MS),
+        };
+        break;
+      case "r": e.preventDefault(); handle.resetSpeed(); break;
+    }
+  }
+
+  function onMaestroKeyUp(e) {
+    if (!activeKeyHold) return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (k !== activeKeyHold.key) return;
+    const { committed, video, holdTimer, key } = activeKeyHold;
+    clearTimeout(holdTimer);
+    activeKeyHold = null;
+    const handle = uiByVideo.get(video);
+    if (!handle) return;
+    if (committed === "hold") handle.exitBoost();
+    else handle.skipBy(key === "u" ? -5 : 5);
+  }
+
+  // Tab-switch / alt-tab mid-hold won't fire keyup — release the boost
+  // cleanly so playbackRate doesn't stick at 2×.
+  function onMaestroBlur() {
+    if (!activeKeyHold) return;
+    if (activeKeyHold.committed === "hold") {
+      const handle = uiByVideo.get(activeKeyHold.video);
+      if (handle) handle.exitBoost();
+    }
+    clearTimeout(activeKeyHold.holdTimer);
+    activeKeyHold = null;
+  }
+
+  window.addEventListener("keydown", onMaestroKeyDown, true);
+  window.addEventListener("keyup", onMaestroKeyUp, true);
+  window.addEventListener("blur", onMaestroBlur);
 
   dlog("[Maestro] content script loaded — watching for videos.");
 })();
