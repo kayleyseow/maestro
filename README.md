@@ -1,38 +1,93 @@
 # Maestro
 
-A Chrome extension that adds the video controls Instagram's web player is missing:
+Hey friends! (my unpaid beta testers). Maestro is a small Chrome
+extension that adds the video controls Instagram's web player has
+been missing — speed, scrubbing, skip, and boost. Everything runs
+locally in your browser, so none of your data goes anywhere.
 
-- **Speed control** — preset playback speeds (0.25x–2x), YouTube-style.
-- **Scrubber** — a draggable seek bar / timeline at the bottom of each video.
+**Where it works:** feed posts, Reels, and post-detail pages
+(`/p/<id>/`). Stories are skipped on purpose.
 
-Scope (v1): feed posts and Reels. Stories are excluded.
+## What it does
 
-Maestro is fully client-side and collects or transmits no data.
+### With a mouse (or trackpad)
 
-## Status
+- **Speed pill** in the top-right of every video. Click to pick from
+  `0.5×` / `1×` / `1.25×` / `1.5×` / `1.75×` / `2×`.
+- **Tap a side margin** to skip ±5 s. Tap quickly a couple of times
+  and it stacks (two taps on the right = +10 s).
+- **Hold a side margin** for a 2× reverse or forward boost — as long
+  as you keep holding.
+- **Drag the scrubber** — the thin white seek bar at the bottom of
+  every video. Hover for a timestamp. There's an optional frame
+  thumbnail too; flip `SHOW_FRAME_PREVIEW = true` in `src/content.js`
+  if you want to play with it.
+- **Promoted reels skip themselves** on the Reels feed.
 
-**Phase 3** — speed-control pill, left/right tap zones, and a draggable
-scrubber at the bottom of every video. Tap a side zone to skip ±5s (stacks
-within ~800ms); press and hold for 2× forward or reverse boost; drag the
-scrubber to seek anywhere. An optional frame-preview thumbnail above the
-scrubber (gated behind `SHOW_FRAME_PREVIEW`) shows the video at the hovered
-position. Promoted reels auto-skip on the Reels feed. IG's overlay chrome
-(caption, mute, follow) fades during boost and drag-Maestro. Maestro is
-disabled entirely on Stories; on post-detail (`/p/<id>/`) the column UI
-stays put.
+While you're boosting or drag-scrubbing, IG's caption / username /
+mute / follow chrome fades out of the way so you can actually see
+the video.
 
-## Load the unpacked extension
+### With a keyboard
 
-1. Open `chrome://extensions` in Chrome.
-2. Enable **Developer mode** (top-right toggle).
-3. Click **Load unpacked** and select this folder.
-4. Open [instagram.com](https://www.instagram.com), then open DevTools (F12)
-   and watch the Console — you'll see `[Maestro] video found` lines as videos
-   appear while you scroll.
+| Key | What it does |
+|---|---|
+| `U` (tap) | Skip −5 s |
+| `U` (hold) | 2× reverse boost while you hold |
+| `I` (tap) | Skip +5 s |
+| `I` (hold) | 2× forward boost while you hold |
+| `Shift+U` / `Shift+I` | Skip ±10 s |
+| `,` / `.` | Step speed down / up through the presets |
+| `R` | Reset speed back to 1× |
 
-## Project layout
+Shortcuts always target whichever video is closest to the center of
+your screen. They're off while you're typing in a DM, comment, or
+search bar, so they won't get in your way.
+
+## How to install it
+
+Maestro isn't on the Chrome Web Store yet, so you'll load it
+directly. Should take about a minute:
+
+1. **Grab the code.** Either clone the repo:
+   ```
+   git clone https://github.com/kayleyseow/maestro.git
+   ```
+   …or just download a ZIP — click the green **Code** button on
+   GitHub, then **Download ZIP**, then unzip it somewhere you'll
+   remember.
+2. Pop open **`chrome://extensions`** in Chrome (paste that into
+   the address bar).
+3. Flip **Developer mode** on — toggle in the top-right of the page.
+4. Click **Load unpacked** (top-left) and pick the `maestro` folder
+   you just grabbed.
+5. Pin Maestro so you can see it — click the little puzzle-piece
+   icon next to the address bar, then the pin next to Maestro.
+6. Open or reload [instagram.com](https://www.instagram.com). The
+   speed pill, tap zones, and scrubber should all appear on every
+   video.
+
+To double-check it's running, open DevTools (F12) → **Console**.
+You'll see lines like `[Maestro] video found` as videos load.
+
+## If something breaks (and thanks for testing!)
+
+Honestly, the more weird stuff you find, the better. The most useful
+thing you can send back:
+
+- The **URL** you were on (e.g. `instagram.com/reels/DXyz.../`)
+- **What you did** — the key you pressed, or the click / drag
+- **What you expected vs. what actually happened**
+- *(Bonus)* a screenshot or quick screen recording
+- *(Bonus)* any red errors from the DevTools Console
+
+DM me or [open an issue on the GitHub repo](https://github.com/kayleyseow/maestro/issues).
+No bug is too small.
+
+## What's in the project
 
 ```
 manifest.json     Manifest V3 config
-src/content.js    Content script — finds and tracks <video> elements
+src/content.js    The actual extension code lives here
+README.md         You're reading it
 ```

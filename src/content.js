@@ -9,7 +9,7 @@
 (() => {
   "use strict";
 
-  const TRACKED_ATTR = "data-Maestro-tracked";
+  const TRACKED_ATTR = "data-maestro-tracked";
   const SPEED_PRESETS = [0.5, 1, 1.25, 1.5, 1.75, 2];
 
   // Single global debug toggle. Flip to true to enable:
@@ -150,7 +150,7 @@
     // Strategy 2: scroll the Reels carousel by one viewport. IG Reels uses
     // CSS scroll-snap, so scrolling by `clientHeight` snaps to the next
     // item. This works regardless of whether the user is hovering.
-    const v = document.querySelector('video[data-Maestro-tracked]');
+    const v = document.querySelector('video[data-maestro-tracked]');
     if (v) {
       let cur = v.parentElement;
       while (cur && cur !== document.documentElement) {
@@ -192,7 +192,7 @@
   // DOM because the elements we tag belong to IG, not us.
   const boostStyleTag = document.createElement("style");
   boostStyleTag.textContent = `
-    .Maestro-boost-hidden {
+    .maestro-boost-hidden {
       opacity: 0 !important;
       pointer-events: none !important;
       transition: opacity 150ms ease !important;
@@ -206,7 +206,7 @@
 
   function mountSpeedUI(video) {
     const host = document.createElement("div");
-    host.className = "Maestro-speed-host";
+    host.className = "maestro-speed-host";
     // Sized + positioned to match the video; the pill is absolute inside.
     // pointer-events: none on the host so clicks pass through to IG except
     // where the pill itself sets pointer-events: auto.
@@ -704,7 +704,7 @@
       if (hiddenChrome.length === 0) {
         hiddenChrome = collectChromeToHide();
       }
-      hiddenChrome.forEach((el) => el.classList.add("Maestro-boost-hidden"));
+      hiddenChrome.forEach((el) => el.classList.add("maestro-boost-hidden"));
       pill.classList.add("hidden");
       // Scrubber stays visible during skip/boost so the user can watch the
       // playhead jump on a skip and accelerate during 2× boost — it's the
@@ -713,7 +713,7 @@
     }
 
     function showChrome() {
-      hiddenChrome.forEach((el) => el.classList.remove("Maestro-boost-hidden"));
+      hiddenChrome.forEach((el) => el.classList.remove("maestro-boost-hidden"));
       hiddenChrome = [];
       pill.classList.remove("hidden");
     }
