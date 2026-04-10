@@ -32,12 +32,13 @@ the video.
 
 | Key | What it does |
 |---|---|
-| `U` (tap) | Skip −5 s |
-| `U` (hold) | 2× reverse boost while you hold |
-| `I` (tap) | Skip +5 s |
-| `I` (hold) | 2× forward boost while you hold |
-| `Shift+U` / `Shift+I` | Skip ±10 s |
-| `,` / `.` | Step speed down / up through the presets |
+| `J` (tap) | Skip −5 s |
+| `J` (hold) | 2× reverse boost while you hold |
+| `K` (tap) | Skip +5 s |
+| `K` (hold) | 2× forward boost while you hold |
+| `Shift+J` / `Shift+K` | Skip ±10 s |
+| `U` / `I` | Step speed down / up through the presets |
+| `M` | Mute / unmute |
 | `R` | Reset speed back to 1× |
 
 Shortcuts always target whichever video is closest to the center of

@@ -211,6 +211,37 @@
     return false;
   }
 
+  // Find Instagram's own mute button for `video`, so the M shortcut can CLICK
+  // it (letting IG flip its own mute state AND update its speaker glyph) rather
+  // than poke video.muted directly — a direct write mutes the audio but leaves
+  // IG's icon stale. The button is the [role="button"] wrapping
+  // <svg aria-label="Audio is muted|playing"> (the descendant of IG's
+  // [aria-label="Adjust volume"] control). Feed posts scope it to the video's
+  // <article>; Reels keep several mounted at once, so we pick the button whose
+  // center sits inside the target video's rect (the active reel).
+  function findIGMuteButton(video) {
+    const scope = video.closest("article") || document;
+    const buttons = [];
+    for (const svg of scope.querySelectorAll("svg[aria-label]")) {
+      const label = (svg.getAttribute("aria-label") || "").toLowerCase();
+      if (!label.startsWith("audio is ")) continue; // "Audio is muted/playing"
+      const btn = svg.closest('[role="button"]');
+      if (btn) buttons.push(btn);
+    }
+    if (buttons.length <= 1) return buttons[0] || null;
+    const vr = video.getBoundingClientRect();
+    const vcx = vr.left + vr.width / 2, vcy = vr.top + vr.height / 2;
+    let best = null, bestDist = Infinity;
+    for (const btn of buttons) {
+      const r = btn.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (cx < vr.left || cx > vr.right || cy < vr.top || cy > vr.bottom) continue;
+      const d = (cx - vcx) ** 2 + (cy - vcy) ** 2;
+      if (d < bestDist) { bestDist = d; best = btn; }
+    }
+    return best || buttons[0];
+  }
+
   // Injected page-level stylesheet — used to hide IG's chrome (account info,
   // follow button, caption, mute) during a 2× boost. Lives outside our shadow
   // DOM because the elements we tag belong to IG, not us.
@@ -1763,9 +1794,10 @@
   dialogMountObserver.observe(document.documentElement, { childList: true, subtree: true });
 
   // Keyboard shortcuts. Target the tracked video closest to viewport center.
-  //   U / I              tap = skip ±5s, hold = 2× reverse / forward boost
-  //   Shift+U / Shift+I  skip ±10s
-  //   , / .              cycle speed preset down/up
+  //   J / K              tap = skip ±5s, hold = 2× reverse / forward boost
+  //   Shift+J / Shift+K  skip ±10s
+  //   U / I              cycle speed preset down/up
+  //   M                  mute / unmute (we claim the key from IG's native M)
   //   R                  reset speed to 1×
   const KEY_HOLD_THRESHOLD_MS = 250;
   let activeKeyHold = null;
@@ -1795,6 +1827,22 @@
   }
 
   function onMaestroKeyDown(e) {
+    // Per-press M diagnostics: logs every M keydown that reaches us, plus the
+    // state of each guard, so the console shows whether the key was received
+    // and — if it bails — why. NO "[Maestro] M keydown seen" line at all means
+    // the event never reached us (IG or focus is eating it before we run).
+    if (DEBUG && (e.key || "").toLowerCase() === "m") {
+      const tgt = findKeyboardTargetVideo();
+      dlog(
+        "[Maestro] M keydown seen —",
+        "repeat:", e.repeat,
+        "modifier:", e.ctrlKey || e.metaKey || e.altKey,
+        "typingInInput:", isTypingInInput(),
+        "targetVideo:", !!tgt,
+        "hasHandle:", !!(tgt && uiByVideo.get(tgt)),
+        "activeElement:", document.activeElement && document.activeElement.tagName
+      );
+    }
     if (e.repeat) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (isTypingInInput()) return;
@@ -1803,22 +1851,19 @@
     const handle = uiByVideo.get(video);
     if (!handle) return;
 
-    // Speed preset cycle — match e.code so any keyboard layout works.
-    if (e.code === "Comma") {
-      e.preventDefault(); handle.cycleSpeed(-1); return;
-    }
-    if (e.code === "Period") {
-      e.preventDefault(); handle.cycleSpeed(+1); return;
-    }
-
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     switch (k) {
-      case "u":
+      // Speed preset cycle down / up. e.key (the letter) is fine here —
+      // unlike the old , / . binding there's no layout-specific punctuation.
+      case "u": e.preventDefault(); handle.cycleSpeed(-1); break;
+      case "i": e.preventDefault(); handle.cycleSpeed(+1); break;
+      // Skip / boost. tap = skip ±5s, Shift+ = skip ±10s, hold = 2× boost.
+      case "j":
         e.preventDefault();
         if (e.shiftKey) { handle.skipBy(-10); return; }
         if (activeKeyHold) return;
         activeKeyHold = {
-          key: "u", video, committed: null,
+          key: "j", video, committed: null,
           holdTimer: setTimeout(() => {
             if (!activeKeyHold || activeKeyHold.committed) return;
             activeKeyHold.committed = "hold";
@@ -1826,12 +1871,12 @@
           }, KEY_HOLD_THRESHOLD_MS),
         };
         break;
-      case "i":
+      case "k":
         e.preventDefault();
         if (e.shiftKey) { handle.skipBy(10); return; }
         if (activeKeyHold) return;
         activeKeyHold = {
-          key: "i", video, committed: null,
+          key: "k", video, committed: null,
           holdTimer: setTimeout(() => {
             if (!activeKeyHold || activeKeyHold.committed) return;
             activeKeyHold.committed = "hold";
@@ -1839,13 +1884,39 @@
           }, KEY_HOLD_THRESHOLD_MS),
         };
         break;
+      // Mute toggle. CLICK IG's own mute button so IG flips its state AND its
+      // speaker icon (writing video.muted directly mutes audio but leaves IG's
+      // glyph stale). We still claim the key (stopImmediatePropagation) so IG's
+      // native M can't fire too and double-toggle. Fall back to a direct mute
+      // if the button isn't in the DOM.
+      case "m": {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const muteBtn = findIGMuteButton(video);
+        if (muteBtn) {
+          muteBtn.click();
+          dlog("[Maestro] mute via M → clicked IG audio button", muteBtn);
+        } else {
+          video.muted = !video.muted;
+          dlog("[Maestro] mute via M → no IG button found; set video.muted =", video.muted);
+        }
+        break;
+      }
       case "r": e.preventDefault(); handle.resetSpeed(); break;
     }
   }
 
   function onMaestroKeyUp(e) {
-    if (!activeKeyHold) return;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // We claim M on keydown; swallow its keyup too so IG's native mute can't
+    // fire on release (IG binds one phase or the other — this covers both).
+    if (k === "m" && !isTypingInInput() && findKeyboardTargetVideo()) {
+      dlog("[Maestro] M keyup swallowed (blocking IG's native mute on release)");
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (!activeKeyHold) return;
     if (k !== activeKeyHold.key) return;
     const { committed, video, holdTimer, key } = activeKeyHold;
     clearTimeout(holdTimer);
@@ -1853,7 +1924,7 @@
     const handle = uiByVideo.get(video);
     if (!handle) return;
     if (committed === "hold") handle.exitBoost();
-    else handle.skipBy(key === "u" ? -5 : 5);
+    else handle.skipBy(key === "j" ? -5 : 5);
   }
 
   // Tab-switch / alt-tab mid-hold won't fire keyup — release the boost
