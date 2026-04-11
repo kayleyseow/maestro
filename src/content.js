@@ -252,6 +252,30 @@
     return false;
   }
 
+  // Read the CSS transition IG uses to expand its volume panel, so the speed
+  // pill can open at the same pace. Walk the volume control + descendants for
+  // the first element carrying a non-zero transition-duration (the element
+  // that actually animates the slide-open) and return its longest-running
+  // duration plus the matching timing function. Null if IG's control isn't
+  // mounted or animates via JS rather than a CSS transition — caller then
+  // keeps the pill's CSS-default timing. Splitting on top-level commas only
+  // (the negative-lookahead) keeps cubic-bezier(...) args intact.
+  function getIGVolumeTransition() {
+    const control = document.querySelector(IG_VOLUME_SELECTOR);
+    if (!control) return null;
+    for (const el of [control, ...control.querySelectorAll("*")]) {
+      const cs = getComputedStyle(el);
+      const durs = cs.transitionDuration.split(",").map((s) => parseFloat(s) || 0);
+      const maxDur = Math.max(0, ...durs);
+      if (maxDur > 0) {
+        const timings = cs.transitionTimingFunction.split(/,(?![^(]*\))/);
+        const i = durs.indexOf(maxDur);
+        return { duration: `${maxDur}s`, timing: (timings[i] || timings[0] || "ease").trim() };
+      }
+    }
+    return null;
+  }
+
   // Find Instagram's own mute button for `video`, so the M shortcut can CLICK
   // it (letting IG flip its own mute state AND update its speaker glyph) rather
   // than poke video.muted directly — a direct write mutes the audio but leaves
@@ -281,6 +305,34 @@
       if (d < bestDist) { bestDist = d; best = btn; }
     }
     return best || buttons[0];
+  }
+
+  // True for any CSS color that paints nothing — "transparent" or an
+  // rgba/hsla whose alpha channel is 0. Used to skip past the mute button's
+  // own (usually transparent) box to the descendant that actually paints the
+  // dark circle.
+  function isTransparentColor(c) {
+    if (!c || c === "transparent") return true;
+    const m = c.match(/^rgba?\(([^)]+)\)/i) || c.match(/^hsla?\(([^)]+)\)/i);
+    if (!m) return false;
+    const parts = m[1].split(/[,\/]/).map((s) => parseFloat(s));
+    return parts.length >= 4 && parts[3] === 0;
+  }
+
+  // IG paints the audio toggle's dark circle on the button itself OR a
+  // descendant (the [role="button"] wrapper is often a transparent box).
+  // Walk button + descendants and return the first element carrying a
+  // non-transparent background, so we can mirror its rendered size + color
+  // onto our speed pill. Null if nothing paints (icon-only button).
+  function muteButtonBackdrop(btn) {
+    const els = [btn, ...btn.querySelectorAll("*")];
+    for (const el of els) {
+      const cs = getComputedStyle(el);
+      if (!isTransparentColor(cs.backgroundColor)) {
+        return { el, bg: cs.backgroundColor };
+      }
+    }
+    return null;
   }
 
   // Injected page-level stylesheet — used to hide IG's chrome (account info,
@@ -322,49 +374,61 @@
           position: absolute;
           top: 8px;
           right: 8px;
-          width: 36px;
-          height: 36px;
-          font: 600 14px/1 "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+          /* Defaults preserve the original look; syncPillToMuteButton()
+             overrides these to mirror IG's live audio toggle. */
+          --m-size: 36px;
+          --m-bg: rgba(0, 0, 0, 0.5);
+          --m-radius: 18px;
+          width: var(--m-size);
+          height: var(--m-size);
+          font: 400 14px/1 "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
           color: #fff;
-          background: rgba(0, 0, 0, 0.5);
-          border-radius: 18px;
+          background: var(--m-bg);
+          border-radius: var(--m-radius);
           cursor: pointer;
           pointer-events: auto;
           user-select: none;
           overflow: hidden;
           transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
         }
-        .pill.open { width: 208px; }
+        /* Six preset circles (each --m-size wide) + 5×2px gaps + 8px row padding. */
+        .pill.open { width: calc(var(--m-size) * 6 + 18px); }
         .pill .display {
           position: absolute;
           right: 0;
           top: 0;
-          width: 36px;
-          height: 36px;
+          width: var(--m-size);
+          height: var(--m-size);
           display: flex;
           align-items: center;
           justify-content: center;
+          /* Match the open row's presets exactly (11px / weight 400 / full-
+             size ×) so the number doesn't resize when the menu opens/closes. */
+          font-size: 11px;
         }
         .pill.open .display { opacity: 0; pointer-events: none; }
-        .pill.shrink .display { font-size: 13px; }
-        .pill.big .display { font-size: 16px; }
+        /* 4-char rates (1.25 / 1.75) — one point smaller so they clear the
+           circle edge. Applied to both states (resting + open row) so a given
+           rate is the same size whether the menu is open or closed. */
+        .pill.shrink .display { font-size: 10px; }
         .pill .display .x {
-          font-size: 0.65em;
+          font-size: 1em;
           opacity: 0.85;
-          margin-left: 1px;
+          margin-left: -1px;
         }
         .pill .row {
           position: absolute;
           right: 0;
           top: 0;
-          height: 36px;
+          height: var(--m-size);
           display: flex;
           align-items: center;
+          gap: 2px;
           padding: 0 4px;
           opacity: 0;
           pointer-events: none;
           transition: opacity 140ms ease 80ms;
-          font-size: 12px;
+          font-size: 11px;
         }
         .pill.open .row { opacity: 1; pointer-events: auto; }
         .pill .row button {
@@ -372,17 +436,23 @@
           background: transparent;
           color: #fff;
           font: inherit;
-          font-weight: 600;
-          height: 28px;
-          min-width: 30px;
-          padding: 0 4px;
-          border-radius: 14px;
+          font-weight: 400;
+          width: var(--m-size);
+          height: var(--m-size);
+          flex: 0 0 auto;
+          padding: 0;
+          border-radius: 50%;
           cursor: pointer;
           display: flex;
           align-items: center;
           justify-content: center;
           white-space: nowrap;
+          transition: background-color 120ms ease;
         }
+        /* Hover preview — light-grey fill so the speed under the cursor reads
+           as "about to be selected". Same fill as the active (current) speed. */
+        .pill .row button.narrow { font-size: 10px; }
+        .pill .row button:hover { background: rgba(255, 255, 255, 0.18); }
         .pill .row button.active { background: rgba(255, 255, 255, 0.18); }
         .pill .row button.preview { background: rgba(255, 255, 255, 0.32); }
         .zone {
@@ -538,6 +608,9 @@
       const btn = document.createElement("button");
       btn.dataset.rate = String(rate);
       btn.textContent = formatRate(rate);
+      // 4-char rates (1.25 / 1.75) get a smaller font so they don't graze the
+      // circle edge — matched to .pill.shrink on the resting display.
+      if (String(rate).length >= 4) btn.classList.add("narrow");
       row.appendChild(btn);
       rowButtons.push(btn);
     }
@@ -545,10 +618,8 @@
     function setRate(r) {
       const prev = video.playbackRate;
       video.playbackRate = r;
-      const s = String(r);
-      pillNum.textContent = s;
-      pill.classList.toggle("shrink", s.length >= 4);
-      pill.classList.toggle("big", s.length === 1);
+      pillNum.textContent = String(r);
+      pill.classList.toggle("shrink", String(r).length >= 4);
       rowButtons.forEach((b) => {
         b.classList.toggle("active", Number(b.dataset.rate) === r);
       });
@@ -1289,6 +1360,59 @@
     // doesn't sit on top of unrelated content. Zones no longer need a periodic
     // occlusion gate — onZoneDocDown hit-tests fresh on every press, so a
     // sidebar/panel opening or closing is handled in real time without state.
+    // Mirror IG's mute button onto the resting pill — match its rendered
+    // diameter, corner radius, and background color so the two read as a
+    // matched pair. Keyed off the live DOM (not IG's obfuscated classes), so
+    // it self-corrects when IG restyles or the viewport resizes. Throttled to
+    // ~2×/sec and only writes when a value actually changed (no style thrash).
+    // Falls back to the pill's CSS defaults whenever no button is mounted.
+    let appliedPillSize = 0;
+    let appliedPillBg = "";
+    let appliedPillTrans = "";
+    let lastPillSyncTs = 0;
+    function syncPillToMuteButton() {
+      const btn = findIGMuteButton(video);
+      if (!btn) return;
+      // Diameter + corner radius + background, from the mute button's
+      // painted circle.
+      const backdrop = muteButtonBackdrop(btn);
+      const rectEl = backdrop ? backdrop.el : btn;
+      const r = rectEl.getBoundingClientRect();
+      const size = Math.round(Math.min(r.width, r.height));
+      if (size && size >= 8) {
+        const bg = backdrop ? backdrop.bg : "rgba(0, 0, 0, 0.5)";
+        if (size !== appliedPillSize || bg !== appliedPillBg) {
+          appliedPillSize = size;
+          appliedPillBg = bg;
+          pill.style.setProperty("--m-size", `${size}px`);
+          pill.style.setProperty("--m-radius", `${size / 2}px`);
+          pill.style.setProperty("--m-bg", bg);
+          dlog("[Maestro] pill synced to mute button — size", size, "bg", bg);
+        }
+      }
+      // Open-animation pace — match IG's volume panel expand. Inline styles
+      // override the .pill rule's default `transition: width 220ms …`; we pin
+      // transition-property to width so only the open/close animates (not the
+      // --m-bg swap above).
+      const trans = getIGVolumeTransition();
+      if (trans) {
+        const key = `${trans.duration} ${trans.timing}`;
+        if (key !== appliedPillTrans) {
+          appliedPillTrans = key;
+          pill.style.transitionProperty = "width";
+          pill.style.transitionDuration = trans.duration;
+          pill.style.transitionTimingFunction = trans.timing;
+          dlog("[Maestro] pill open-timing synced to IG —", key);
+        }
+      }
+    }
+    function maybeSyncPillToMuteButton() {
+      const now = performance.now();
+      if (now - lastPillSyncTs < 500) return;
+      lastPillSyncTs = now;
+      syncPillToMuteButton();
+    }
+
     let lastVisibilityState = null; // for change-only debug logging
     function updatePosition() {
       const rect = video.getBoundingClientRect();
@@ -1317,6 +1441,8 @@
       const offset = headerOverlapPx(rect);
       pill.style.top = `${8 + offset}px`;
 
+      maybeSyncPillToMuteButton();
+
       if (DEBUG && lastVisibilityState !== "shown") {
         dlog("[Maestro debug] host SHOWN — rect:", rect, "URL:", location.pathname);
         lastVisibilityState = "shown";
@@ -1325,6 +1451,19 @@
 
     pill.addEventListener("pointerdown", onPillDown);
     document.addEventListener("pointerdown", onDocDown, true);
+
+    // Hover-to-expand (mouse only), mirroring IG's audio toggle which slides
+    // open the instant you hover it. The pill grows leftward from its anchored
+    // right edge, so the cursor stays inside the expanded box and won't trip an
+    // immediate pointerleave. Touch has no hover, so tap-to-open (onPillDown)
+    // stays the path there. pointerleave is guarded on pointerHeld so a
+    // press-and-slide selection isn't collapsed out from under the cursor.
+    pill.addEventListener("pointerenter", (e) => {
+      if (e.pointerType === "mouse") setOpen(true);
+    });
+    pill.addEventListener("pointerleave", (e) => {
+      if (e.pointerType === "mouse" && !pointerHeld) setOpen(false);
+    });
 
     const ro = new ResizeObserver(updatePosition);
     ro.observe(video);
