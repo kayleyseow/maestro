@@ -30,10 +30,12 @@
   // Forced on internally whenever SHOW_FRAME_PREVIEW is on.
   const SHOW_TOTAL_TIME = false;
 
-  // Kept under ~500ms — IG sometimes auto-advances on its own after that
-  // and our skip then fires into a different DOM.
-  const PROMOTED_SKIP_DELAY_MIN_MS = 100;
-  const PROMOTED_SKIP_DELAY_MAX_MS = 250;
+  // Delay between detecting a promoted reel and firing the skip — kept tiny so
+  // the ad is gone almost instantly. The small random jitter just avoids a
+  // perfectly robotic cadence. Stays well under ~500ms: past that IG sometimes
+  // auto-advances on its own and our skip then fires into a different DOM.
+  const PROMOTED_SKIP_DELAY_MIN_MS = 0;
+  const PROMOTED_SKIP_DELAY_MAX_MS = 50;
 
   // Scope: feed posts, Explore, and Reels only — Stories are out per
   // product scope (see README). IG's Stories URLs all live under /stories/.
@@ -106,7 +108,7 @@
 
   // Make the promoted reel's container visually invisible AND silence the
   // video, while preserving its layout box. `visibility: hidden` keeps the
-  // element's height in flow so scroll-snap math (clickNextReel Strategy 2)
+  // element's height in flow so scroll-snap math (skipReel Strategy 2)
   // still computes correct viewport offsets — using `display: none` would
   // collapse the height and shift everything below it, potentially
   // confusing IG's carousel.
@@ -115,6 +117,10 @@
   // unmutes via DOM property or volume change as part of its playback
   // logic, the other one keeps the audio at 0. Practically: the user gets
   // no audio at all during the brief delay before scroll.
+  //
+  // Returns the container it blanked (or null), so the caller can restore its
+  // visibility when the reel scrolls away or IG reuses this pooled <video> for
+  // fresh content — otherwise a recycled non-ad reel would be left blank.
   function hidePromotedReel(video) {
     try {
       video.muted = true;
@@ -126,29 +132,61 @@
     if (container && container !== document.body) {
       container.style.visibility = "hidden";
       dlog("[Maestro] promoted-skip: blanked + muted promoted reel container", container);
+      return container;
     }
+    return null;
   }
 
-  // Advance the Reels feed past the current reel. Tries three strategies
-  // in order — button click, scroll-snap by viewport, ArrowDown keydown —
-  // because the next-reel button is only mounted while the user is hovering
-  // the Reels area, so Strategy 1 silently fails when auto-skip fires
-  // headlessly.
-  function clickNextReel() {
-    // Strategy 1: click the next-reel button. Works when the user's cursor
-    // is over the Reels area (IG mounts the button on hover).
-    const btn =
-      document.querySelector('[aria-label="Navigate to next Reel"]') ||
-      document.querySelector('[aria-label*="next reel" i]') ||
-      document.querySelector('[aria-label*="next" i][role="button"]');
-    if (btn) {
-      dlog("[Maestro] promoted-skip: clicking next-reel button", btn);
-      btn.click();
-      return;
+  // Direction the user is currently travelling through the Reels feed, so a
+  // promoted-reel skip can continue *with* the scroll instead of always going
+  // forward. The old always-forward skip trapped an upward scroll on an ad:
+  // reaching the ad going up triggered a forward skip that dropped the user
+  // right back below it, so they could never get past the ad upward. We read
+  // the snap container's scrollTop on real scroll events and remember the last
+  // non-trivial direction; defaults to "down" (forward) for first load and any
+  // programmatic activation with no prior scroll.
+  let lastReelScrollDir = "down";
+  let lastReelScrollEl = null;
+  let lastReelScrollTop = 0;
+  document.addEventListener("scroll", (e) => {
+    const el = e.target;
+    if (!el || el.nodeType !== 1) return;               // ignore document/window scrolls
+    if (el.scrollHeight <= el.clientHeight + 4) return; // not the vertical snap container
+    // Only compare deltas within the same element — switching containers would
+    // diff unrelated scrollTops and report a bogus direction.
+    if (el === lastReelScrollEl) {
+      const dy = el.scrollTop - lastReelScrollTop;
+      if (Math.abs(dy) > 2) lastReelScrollDir = dy > 0 ? "down" : "up";
+    }
+    lastReelScrollEl = el;
+    lastReelScrollTop = el.scrollTop;
+  }, true);
+
+  // Advance the Reels feed one item in `dir` ("down" = forward/next reel,
+  // "up" = back/previous reel). Tries three strategies in order — button
+  // click, scroll-snap by viewport, Arrow keydown — because the prev/next
+  // button is only mounted while the user is hovering the Reels area, so
+  // Strategy 1 silently fails when auto-skip fires headlessly. Skipping in the
+  // travel direction means an ad reached while scrolling up is skipped *up*
+  // (past it) rather than bouncing the user back down onto the reel below.
+  function skipReel(dir) {
+    const forward = dir !== "up";
+    // Strategy 1: click IG's prev/next-reel button. Works when the user's
+    // cursor is over the Reels area (IG mounts the button on hover).
+    const selectors = forward
+      ? ['[aria-label="Navigate to next Reel"]', '[aria-label*="next reel" i]', '[aria-label*="next" i][role="button"]']
+      : ['[aria-label="Navigate to previous Reel"]', '[aria-label*="previous reel" i]', '[aria-label*="previous" i][role="button"]'];
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        dlog("[Maestro] promoted-skip: clicking", forward ? "next" : "previous", "reel button", btn);
+        btn.click();
+        return;
+      }
     }
 
-    // Strategy 2: scroll the Reels carousel by one viewport. IG Reels uses
-    // CSS scroll-snap, so scrolling by `clientHeight` snaps to the next
+    // Strategy 2: scroll the Reels carousel by ±one viewport. IG Reels uses
+    // CSS scroll-snap, so scrolling by ±clientHeight snaps to the adjacent
     // item. This works regardless of whether the user is hovering.
     const v = document.querySelector('video[data-maestro-tracked]');
     if (v) {
@@ -157,8 +195,9 @@
         if (cur.scrollHeight > cur.clientHeight + 4) {
           const style = getComputedStyle(cur);
           if (style.overflowY === "auto" || style.overflowY === "scroll") {
-            dlog("[Maestro] promoted-skip: scrolling reels container by", cur.clientHeight, "px", cur);
-            cur.scrollBy(0, cur.clientHeight);
+            const dy = forward ? cur.clientHeight : -cur.clientHeight;
+            dlog("[Maestro] promoted-skip: scrolling reels container by", dy, "px", cur);
+            cur.scrollBy(0, dy);
             return;
           }
         }
@@ -166,15 +205,17 @@
       }
     }
 
-    // Strategy 3: synthesize an ArrowDown keydown. IG binds arrow-key
-    // navigation on the Reels page. Untrusted event but worth a shot —
-    // last resort if no scroll container and no button.
-    dlog("[Maestro] promoted-skip: dispatching ArrowDown keydown");
+    // Strategy 3: synthesize an Arrow keydown. IG binds arrow-key navigation
+    // on the Reels page. Untrusted event but worth a shot — last resort if no
+    // scroll container and no button.
+    const key = forward ? "ArrowDown" : "ArrowUp";
+    const keyCode = forward ? 40 : 38;
+    dlog("[Maestro] promoted-skip: dispatching", key, "keydown");
     document.dispatchEvent(new KeyboardEvent("keydown", {
-      key: "ArrowDown",
-      code: "ArrowDown",
-      keyCode: 40,
-      which: 40,
+      key,
+      code: key,
+      keyCode,
+      which: keyCode,
       bubbles: true,
       cancelable: true,
     }));
@@ -1295,46 +1336,110 @@
     video.addEventListener("loadedmetadata", updatePosition);
     video.addEventListener("resize", updatePosition);
 
-    // Auto-skip promoted reels.
+    // Set by the auto-skip block below to tear down its listeners/timers and
+    // restore any blanking; called from cleanup(). Null when AUTO_SKIP_PROMOTED
+    // is off.
+    let promotedSkipTeardown = null;
+
+    // Auto-skip promoted reels — re-armed on every reel *activation*, not once
+    // per mount.
     //
-    // Why multiple triggers:
-    //   - `play` fires when IG calls video.play() on this reel becoming the
-    //     active item. But IG can call play() before our MutationObserver
-    //     callback finishes attaching the listener — race we can lose.
-    //   - `timeupdate` fires repeatedly during actual playback. Even if we
-    //     missed `play`, the first timeupdate is a guaranteed catch-up.
-    //   - Immediate check covers the case where the video is already mid-
-    //     playback by the time we mount (e.g. SPA re-attach of a reused
-    //     element).
+    // IG virtualizes the Reels feed: it keeps a small pool of <video> elements
+    // mounted and swaps their source + surrounding DOM as you scroll, so one
+    // element shows many reels over its life and is rarely unmounted between
+    // them. The old per-mount latch fired exactly once per element — the first
+    // ad only. Scrolling back to an ad, or forward into a later ad on a reused
+    // element, never re-checked (the latch / check budget was already spent).
     //
-    // We also retry the detection a few times: when a reel first mounts,
-    // IG sometimes hasn't yet populated the surrounding disclosure DOM
-    // (the "Ad" badge text and ig_redirect link) inside the reel item.
-    // The first timeupdate can land before the DOM is fully decorated, so
-    // the second or third check catches it.
-    if (AUTO_SKIP_PROMOTED && isReelsFeedPage()) {
-      let promotedChecksLeft = 5;
-      let promotedActionTaken = false;
-      const maybeSkipPromoted = (trigger) => {
-        if (promotedActionTaken || promotedChecksLeft-- <= 0) return;
-        const isPromoted = isPromotedReel(video);
-        dlog("[Maestro] promoted-skip check via", trigger, "isPromoted:", isPromoted, "checksLeft:", promotedChecksLeft, video);
-        if (!isPromoted) return;
-        promotedActionTaken = true;
-        // Black out the promoted reel's container IMMEDIATELY so the user
-        // doesn't see the content during the brief delay before we scroll
-        // past it. visibility:hidden keeps the layout box so scroll-snap
-        // math stays correct (see hidePromotedReel comment).
-        hidePromotedReel(video);
+    // Model now:
+    //   - armPromotedSkip() resets the latch and runs a short, bounded retry
+    //     sweep. It's called whenever the element (re)activates on a reel:
+    //     `play` (scroll-snap autoplay makes a reel the active item) and
+    //     `loadstart` (IG repointed this pooled element at a different reel).
+    //   - The retry sweep exists because IG often hasn't painted the disclosure
+    //     DOM ("Ad" badge text / ig_redirect link) at the instant playback
+    //     starts; we re-check a few times over ~1.2s, then stop until the next
+    //     activation — rather than bleeding a budget on every timeupdate.
+    //   - On `pause`/`emptied` we drop the latch so the next activation
+    //     re-checks. This is what makes scrolling *back* to an ad skip again.
+    //   - The page gate lives inside the check (not at hook-attach time) so an
+    //     element first mounted off the Reels feed still works after an SPA
+    //     navigation into Reels.
+    if (AUTO_SKIP_PROMOTED) {
+      let promotedSkipLatched = false; // a skip is already in flight this episode
+      let hiddenForAd = null;          // container we blanked, to restore later
+      let sweepTimers = [];
+
+      const clearSweep = () => {
+        for (const t of sweepTimers) clearTimeout(t);
+        sweepTimers = [];
+      };
+      const restoreHidden = () => {
+        if (hiddenForAd) {
+          hiddenForAd.style.visibility = "";
+          hiddenForAd = null;
+        }
+      };
+
+      const checkPromoted = (trigger) => {
+        if (promotedSkipLatched) return;
+        if (!isReelsFeedPage()) return;
+        if (!isPromotedReel(video)) return;
+        promotedSkipLatched = true;
+        clearSweep();
+        // Pin the travel direction NOW (when we detected the ad) so the skip
+        // continues the way the user is scrolling — our own scrollBy below
+        // would otherwise overwrite lastReelScrollDir before the timer fires.
+        const dir = lastReelScrollDir;
+        // Black out the promoted reel IMMEDIATELY so the user doesn't see it
+        // during the brief delay before we scroll past. visibility:hidden keeps
+        // the layout box so scroll-snap math stays correct (see hidePromotedReel).
+        hiddenForAd = hidePromotedReel(video);
         const delay = PROMOTED_SKIP_DELAY_MIN_MS +
           Math.random() * (PROMOTED_SKIP_DELAY_MAX_MS - PROMOTED_SKIP_DELAY_MIN_MS);
-        dlog("[Maestro] promoted-skip: reel detected, skipping in", Math.round(delay), "ms", video);
-        setTimeout(clickNextReel, delay);
+        dlog("[Maestro] promoted-skip via", trigger, "— skipping", dir, "in", Math.round(delay), "ms", video);
+        // Track the skip timer in sweepTimers so it's cancelled if the reel
+        // goes inactive first (scrolled away / IG auto-advanced) — otherwise a
+        // late skip would yank an unrelated reel.
+        sweepTimers.push(setTimeout(() => skipReel(dir), delay));
       };
-      video.addEventListener("play", () => maybeSkipPromoted("play"));
-      video.addEventListener("timeupdate", () => maybeSkipPromoted("timeupdate"));
-      if (!video.paused && video.currentTime > 0) maybeSkipPromoted("immediate");
-      dlog("[Maestro] promoted-skip: hook attached for", video.src);
+
+      const armPromotedSkip = (trigger) => {
+        clearSweep();
+        promotedSkipLatched = false;
+        // (Re)activating on a fresh reel — undo any blanking left from a prior
+        // ad so a recycled non-ad reel isn't stranded hidden.
+        restoreHidden();
+        for (const t of [0, 60, 150, 300, 600, 1200]) {
+          sweepTimers.push(setTimeout(() => checkPromoted(`${trigger}+${t}`), t));
+        }
+      };
+
+      const onActivate = () => armPromotedSkip("play");
+      const onLoadStart = () => armPromotedSkip("loadstart");
+      // Reel went inactive (scrolled away) — drop the latch so the next
+      // activation re-checks. Keep any blanking until the next activation so
+      // there's no flash as we scroll off the ad.
+      const onPause = () => { clearSweep(); promotedSkipLatched = false; };
+      // Source cleared — same, plus restore blanking since this element is
+      // about to be repointed at different content.
+      const onEmptied = () => { onPause(); restoreHidden(); };
+
+      video.addEventListener("play", onActivate);
+      video.addEventListener("loadstart", onLoadStart);
+      video.addEventListener("pause", onPause);
+      video.addEventListener("emptied", onEmptied);
+      if (!video.paused) armPromotedSkip("immediate");
+      dlog("[Maestro] promoted-skip: re-arming hook attached", video);
+
+      promotedSkipTeardown = () => {
+        clearSweep();
+        restoreHidden();
+        video.removeEventListener("play", onActivate);
+        video.removeEventListener("loadstart", onLoadStart);
+        video.removeEventListener("pause", onPause);
+        video.removeEventListener("emptied", onEmptied);
+      };
     }
 
     // Scrubber wiring — mobile-IG-style draggable progress bar.
@@ -1604,6 +1709,7 @@
       resetSpeed() { setRate(1); },
       cleanup() {
         alive = false;
+        if (promotedSkipTeardown) promotedSkipTeardown();
         if (boostHoldTimer) clearTimeout(boostHoldTimer);
         if (skipBadgeTimer) clearTimeout(skipBadgeTimer);
         if (reverseHandle) {
