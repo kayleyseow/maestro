@@ -25,6 +25,36 @@
   // Reels only — other surfaces lack clean per-item "next" navigation.
   const AUTO_SKIP_PROMOTED = true;
 
+  // Auto-advance (Reels) — when ON, scroll to the next reel as soon as the
+  // current one finishes a single play, instead of letting IG loop it forever.
+  // The setting is global across every reel and persisted in localStorage so
+  // the choice survives reloads (off by default, per product decision). A small
+  // listener set keeps every mounted toggle's icon in sync when the value flips
+  // on any one reel.
+  const AUTO_ADVANCE_KEY = "maestro:autoAdvance";
+  // How far before the end (seconds) to fire the skip. timeupdate fires
+  // ~4×/sec, so a 0.35s lead reliably catches the end before a looping reel
+  // wraps currentTime back to 0 (loop = true means `ended` never fires).
+  const AUTO_ADVANCE_LEAD_S = 0.35;
+  let autoAdvanceEnabled = false;
+  try {
+    autoAdvanceEnabled = localStorage.getItem(AUTO_ADVANCE_KEY) === "1";
+  } catch (e) {
+    // localStorage can throw in locked-down contexts; default to off.
+  }
+  const autoAdvanceListeners = new Set();
+  function setAutoAdvance(on) {
+    autoAdvanceEnabled = !!on;
+    try {
+      localStorage.setItem(AUTO_ADVANCE_KEY, autoAdvanceEnabled ? "1" : "0");
+    } catch (e) {
+      // Persisting failed (private mode / blocked storage). The in-memory value
+      // still drives this session; we just won't remember it next load.
+    }
+    autoAdvanceListeners.forEach((fn) => fn(autoAdvanceEnabled));
+    dlog("[Maestro] auto-advance", autoAdvanceEnabled ? "ON" : "OFF");
+  }
+
   // User-tunable scrubber preferences (future settings UI will toggle these).
   const SHOW_FRAME_PREVIEW = false;
   // Forced on internally whenever SHOW_FRAME_PREVIEW is on.
@@ -307,6 +337,127 @@
     return best || buttons[0];
   }
 
+  // The action-rail icons we know about, by aria-label. Used to locate the Like
+  // anchor and to measure the rail's natural icon-to-icon spacing so our toggle
+  // drops in at the same rhythm. ("Unlike" is the liked state of the heart.)
+  const RAIL_ICON_LABELS = new Set([
+    "Like", "Unlike", "Comment", "Repost", "Share", "Save", "More",
+  ]);
+
+  // Collect this reel's action-rail icons (the right-hand Like/Comment/… <svg>s)
+  // as { label, svg, cx, cy } sorted top→bottom. IG keeps several reels' rails
+  // mounted at once (virtualized pool), so we scope to the rail whose icons fall
+  // within this video's vertical span. Horizontally we DON'T require the icons
+  // to be inside the video: on desktop web the rail sits in the gutter to the
+  // RIGHT of the video, only overlaying it on narrow/mobile layouts — so we
+  // accept anything from the video's left edge out to a gutter's reach past its
+  // right edge. Keyed off aria-label, not IG's obfuscated classes.
+  const RAIL_GUTTER_PX = 200;
+  function getReelRailIcons(video) {
+    const vr = video.getBoundingClientRect();
+    const icons = [];
+    for (const svg of document.querySelectorAll("svg[aria-label]")) {
+      if (!RAIL_ICON_LABELS.has(svg.getAttribute("aria-label"))) continue;
+      const r = svg.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (cy < vr.top || cy > vr.bottom) continue;             // wrong reel
+      if (cx < vr.left || cx > vr.right + RAIL_GUTTER_PX) continue; // not this rail
+      icons.push({ label: svg.getAttribute("aria-label"), svg, cx, cy });
+    }
+    icons.sort((a, b) => a.cy - b.cy);
+    return icons;
+  }
+
+  // The rail's icon-to-icon vertical pitch (center-to-center), from the median
+  // of consecutive gaps — robust to one odd spacing. Null if we can't measure
+  // (fewer than two icons); caller falls back to a sane default.
+  function railIconPitch(icons) {
+    if (icons.length < 2) return null;
+    const gaps = [];
+    for (let i = 1; i < icons.length; i++) gaps.push(icons[i].cy - icons[i - 1].cy);
+    gaps.sort((a, b) => a - b);
+    return gaps[Math.floor(gaps.length / 2)];
+  }
+
+  // Read the font IG uses for the action-rail label under the Like heart — the
+  // "Likes" word, or a count like "2,424" — so our "auto" label matches its
+  // family/size/weight exactly rather than an approximation. From the icon's
+  // <svg> we climb a few ancestors (the label is ~6 levels up, in a sibling
+  // subtree of the icon button) and take the first short `span[dir="auto"]`.
+  //
+  // Targeting that OUTER label span is deliberate: IG wraps a *numeric* count in
+  // an extra inner <span class="html-span"> that adds bold weight, while a word
+  // label like "Likes" sits directly in the outer span. Reading the outer
+  // dir="auto" span gives the label-level weight ("Likes" style) consistently in
+  // both cases, instead of the heavier number styling. We copy the *computed*
+  // font (resolves inheritance → rendered values). dir="auto" is a semantic hook
+  // (bidi), far more stable than IG's obfuscated x-classes. Returns null when no
+  // label is shown; the caller then keeps the CSS default.
+  function getIGRailLabelFont(fromEl) {
+    let scope = fromEl;
+    for (let i = 0; i < 7 && scope; i++) {
+      for (const span of scope.querySelectorAll('span[dir="auto"]')) {
+        const t = (span.textContent || "").trim();
+        if (!t || t.length > 12) continue;                     // a label, not a caption
+        const cs = getComputedStyle(span);
+        return {
+          fontFamily: cs.fontFamily,
+          fontSize: cs.fontSize,
+          fontWeight: cs.fontWeight,
+          letterSpacing: cs.letterSpacing,
+          lineHeight: cs.lineHeight,
+        };
+      }
+      scope = scope.parentElement;
+    }
+    return null;
+  }
+
+  // Mimic the subtle "grow on hover" of IG's rail icons. The TIMING (duration +
+  // easing) is read live from a real rail button's computed transition — always
+  // accessible, and the part that makes the motion feel native. The SCALE amount
+  // we pull from IG's own :hover rule when its stylesheet is same-origin; some IG
+  // CSS is served cross-origin (opaque to script), so we fall back to a subtle
+  // default there. Both are cached — identical across reels, and the stylesheet
+  // scan is a one-time cost.
+  const IG_HOVER_DEFAULT_SCALE = 1.06;
+  let igHoverScale; // undefined = unscanned; null = scanned, none found; number
+  function scanIGHoverScale(buttonEl) {
+    if (igHoverScale !== undefined) return igHoverScale;
+    igHoverScale = null;
+    const wanted = new Set(
+      (buttonEl.className || "").split(/\s+/).filter(Boolean).map((t) => `.${t}:hover`)
+    );
+    for (const sheet of document.styleSheets) {
+      let rules;
+      try { rules = sheet.cssRules; } catch (e) { continue; } // cross-origin → opaque
+      if (!rules) continue;
+      for (const rule of rules) {
+        if (!rule.style || !wanted.has(rule.selectorText)) continue;
+        const m = (rule.style.transform || "").match(/scale[XY]?\(\s*([\d.]+)/i);
+        const s = m && parseFloat(m[1]);
+        if (s && s > 1 && s < 1.5) { igHoverScale = s; return s; }
+      }
+    }
+    return igHoverScale;
+  }
+  function getIGRailHover(buttonEl) {
+    const cs = getComputedStyle(buttonEl);
+    const props = cs.transitionProperty.split(",").map((s) => s.trim());
+    const durs = cs.transitionDuration.split(",").map((s) => s.trim());
+    const times = cs.transitionTimingFunction.split(/,(?![^(]*\))/).map((s) => s.trim());
+    let i = props.indexOf("transform");
+    if (i < 0) i = props.indexOf("all");
+    if (i < 0) i = 0;
+    let duration = durs[i] || durs[0] || "0s";
+    let timing = times[i] || times[0] || "ease";
+    // IG doesn't transition this element → use a natural default so the grow
+    // still animates rather than snapping.
+    if (!duration || duration === "0s") { duration = "200ms"; timing = "ease"; }
+    return { scale: scanIGHoverScale(buttonEl) || IG_HOVER_DEFAULT_SCALE, duration, timing };
+  }
+
   // True for any CSS color that paints nothing — "transparent" or an
   // rgba/hsla whose alpha channel is 0. Used to skip past the mute button's
   // own (usually transparent) box to the descendant that actually paints the
@@ -582,6 +733,81 @@
         .scrubber.with-preview.dragging .scrubber-preview-canvas { opacity: 1; }
         .scrubber.hidden { opacity: 0; pointer-events: none; transition: opacity 150ms ease; }
         .scrubber.disabled { display: none; }
+        /* Auto-advance toggle — Reels only. A bare white play glyph + "auto"
+           label, styled to sit in IG's right-hand action rail just above the
+           Like button: drop-shadow for legibility over video, no chrome of its
+           own so it reads as one of IG's native icons. Positioned each frame by
+           updateAutoTogglePosition; hidden whenever no Like button is located. */
+        .auto-toggle {
+          position: absolute;
+          left: 0;
+          top: 0;
+          display: none;
+          flex-direction: column;
+          align-items: center;
+          gap: 3px;
+          /* Positioned by JS so the play glyph's center lands one rail-pitch
+             above IG's Like icon; translateX centers the column on that icon. */
+          transform: translateX(-50%);
+          pointer-events: auto;
+          cursor: pointer;
+          user-select: none;
+          -webkit-user-select: none;
+          filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+          opacity: 0.92;
+          transition: opacity 120ms ease;
+        }
+        .auto-toggle:hover { opacity: 1; }
+        /* Grow on hover, mimicking IG's rail icons. Scale amount + timing are
+           synced live from a real IG rail button (maybeSyncAutoHover); the var
+           default keeps it sane until then. Like IG: hovering the icon grows
+           BOTH the glyph and the "auto" label (sibling combinator); hovering the
+           label grows only the label. */
+        .auto-icon:hover,
+        .auto-icon:hover ~ .auto-label,
+        .auto-label:hover { transform: scale(var(--m-hover-scale, 1.06)); }
+        /* Press feedback lives on the glyph only — the "auto" label must not
+           react to a click (no scale/squish). Higher specificity than the hover
+           rule, so a press wins over hover on the icon. */
+        .auto-toggle:active .auto-icon { transform: scale(0.9); }
+        /* A touch larger than IG's 24px rail glyphs so the filled play triangle
+           reads at the same visual height as the Share/send icon (its glyph
+           fills more of its box than ours does). Fixed height so the icon's
+           center offset is predictable for the pitch math below. */
+        .auto-toggle .auto-icon { height: 28px; display: flex; align-items: center; transition: transform 120ms ease; }
+        .auto-toggle svg { width: 28px; height: 28px; display: block; }
+        .auto-toggle .tri {
+          /* Transparent-WHITE (not 'none') so the fill can ANIMATE its alpha
+             0→1 on toggle — R=G=B stay 255 throughout, so it fades in cleanly
+             with no gray flash. Hollow look = alpha-0 fill + white stroke. */
+          fill: rgba(255, 255, 255, 0);
+          stroke: #fff;
+          stroke-width: 2.2;
+          stroke-linejoin: round;
+          transition: fill 200ms ease;
+        }
+        /* ON = filled glyph; OFF = hollow outline — mirrors how IG's own rail
+           icons fill in on activation (e.g. the heart). */
+        .auto-toggle.on .tri { fill: rgba(255, 255, 255, 1); }
+        /* Spring-pop the glyph when it flips ON (off→on only; see popIcon). The
+           overshoot + slight undershoot give the bounce. It briefly overrides
+           the hover/press transforms while running, then reverts (the transform
+           transition smooths the hand-off). */
+        @keyframes maestro-pop {
+          0%   { transform: scale(1); }
+          45%  { transform: scale(1.25); }
+          72%  { transform: scale(0.95); }
+          100% { transform: scale(1); }
+        }
+        .auto-toggle .auto-icon.pop { animation: maestro-pop 320ms ease-out; }
+        .auto-toggle .auto-label {
+          font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+          color: #fff;
+          letter-spacing: 0.2px;
+          transition: transform 120ms ease;
+        }
+        /* Dim the label a touch when off so the active state reads brighter. */
+        .auto-toggle:not(.on) .auto-label { opacity: 0.85; }
       </style>
       <div class="zone left"></div>
       <div class="zone right"></div>
@@ -590,6 +816,10 @@
         <div class="display"><span class="num"></span><span class="x">×</span></div>
       </div>
       <div class="boost-badge"></div>
+      <div class="auto-toggle" role="button" tabindex="0" aria-pressed="false" aria-label="Auto-advance reels">
+        <span class="auto-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="tri" d="M5 4L5 20L19 12Z"/></svg></span>
+        <span class="auto-label">auto</span>
+      </div>
       <div class="scrubber">
         <div class="scrubber-track"><div class="scrubber-fill"></div></div>
         <div class="scrubber-thumb"></div>
@@ -1104,6 +1334,16 @@
         e.clientX >= pillRect.left && e.clientX <= pillRect.right &&
         e.clientY >= pillRect.top && e.clientY <= pillRect.bottom
       ) return;
+      // Same for the auto-advance toggle — it sits over the right rail, inside
+      // the right zone. Without this the zone would claim the press (the video
+      // is below our host) and fire a skip instead of flipping the toggle.
+      if (autoToggle.style.display !== "none") {
+        const atRect = autoToggle.getBoundingClientRect();
+        if (
+          e.clientX >= atRect.left && e.clientX <= atRect.right &&
+          e.clientY >= atRect.top && e.clientY <= atRect.bottom
+        ) return;
+      }
       const rect = video.getBoundingClientRect();
       const visible = isVideoVisible(rect);
       const blockedModal = isBlockedByOtherModal();
@@ -1442,6 +1682,7 @@
       pill.style.top = `${8 + offset}px`;
 
       maybeSyncPillToMuteButton();
+      updateAutoTogglePosition(rect);
 
       if (DEBUG && lastVisibilityState !== "shown") {
         dlog("[Maestro debug] host SHOWN — rect:", rect, "URL:", location.pathname);
@@ -1580,6 +1821,146 @@
         video.removeEventListener("emptied", onEmptied);
       };
     }
+
+    // Auto-advance toggle (Reels). Reflects the global autoAdvanceEnabled,
+    // flips it on click / Enter / Space, and re-syncs whenever any *other*
+    // reel's toggle changes the shared value (via autoAdvanceListeners).
+    const autoToggle = shadow.querySelector(".auto-toggle");
+    const autoIcon = shadow.querySelector(".auto-icon");
+    const autoLabel = shadow.querySelector(".auto-label");
+    let renderedOn = null;
+    function popIcon() {
+      // Restart the keyframe each time: remove, force reflow, re-add.
+      autoIcon.classList.remove("pop");
+      void autoIcon.offsetWidth;
+      autoIcon.classList.add("pop");
+    }
+    function renderAutoToggle(on) {
+      const wasOn = renderedOn;
+      renderedOn = on;
+      autoToggle.classList.toggle("on", on);
+      autoToggle.setAttribute("aria-pressed", on ? "true" : "false");
+      // Pop only on a real off→on flip — not the initial mount (wasOn === null)
+      // or a redundant on→on re-render.
+      if (on && wasOn === false) popIcon();
+    }
+    renderAutoToggle(autoAdvanceEnabled);
+    autoAdvanceListeners.add(renderAutoToggle);
+    function onAutoToggleActivate(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      setAutoAdvance(!autoAdvanceEnabled);
+    }
+    autoToggle.addEventListener("pointerdown", onAutoToggleActivate);
+    autoToggle.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " " || e.code === "Space") {
+        onAutoToggleActivate(e);
+      }
+    });
+
+    // Mirror IG's rail count font onto our "auto" label so it reads as part of
+    // the rail. Throttled (~2×/sec) and only writes on change, like the pill's
+    // mute-button sync — no style thrash. `fromEl` is the located Like <svg>.
+    let appliedLabelFont = "";
+    let lastLabelFontTs = 0;
+    function maybeSyncAutoLabelFont(fromEl) {
+      const now = performance.now();
+      if (now - lastLabelFontTs < 500) return;
+      lastLabelFontTs = now;
+      const f = getIGRailLabelFont(fromEl);
+      if (!f) return;
+      const key = [f.fontFamily, f.fontSize, f.fontWeight, f.letterSpacing, f.lineHeight].join("|");
+      if (key === appliedLabelFont) return;
+      appliedLabelFont = key;
+      autoLabel.style.fontFamily = f.fontFamily;
+      autoLabel.style.fontSize = f.fontSize;
+      autoLabel.style.fontWeight = f.fontWeight;
+      autoLabel.style.letterSpacing = f.letterSpacing;
+      autoLabel.style.lineHeight = f.lineHeight;
+      dlog("[Maestro] auto-label font synced to IG rail —", key);
+    }
+
+    // Mirror IG's hover-grow timing + scale onto our icon and label. The CSS
+    // rules drive WHICH element grows (icon hover → both; label hover → label);
+    // here we just feed them IG's values via the --m-hover-scale var and inline
+    // transition timing. Throttled + change-gated like the font sync.
+    let appliedHoverKey = "";
+    let lastHoverSyncTs = 0;
+    function maybeSyncAutoHover(likeSvg) {
+      const now = performance.now();
+      if (now - lastHoverSyncTs < 500) return;
+      lastHoverSyncTs = now;
+      const btn = likeSvg.closest('[role="button"]');
+      if (!btn) return;
+      const h = getIGRailHover(btn);
+      const key = `${h.scale}|${h.duration}|${h.timing}`;
+      if (key === appliedHoverKey) return;
+      appliedHoverKey = key;
+      autoToggle.style.setProperty("--m-hover-scale", String(h.scale));
+      for (const el of [autoIcon, autoLabel]) {
+        el.style.transitionProperty = "transform";
+        el.style.transitionDuration = h.duration;
+        el.style.transitionTimingFunction = h.timing;
+      }
+      dlog("[Maestro] auto hover synced from IG — scale", h.scale, h.duration, h.timing);
+    }
+
+    // Drop the toggle into IG's action rail one slot above the Like icon, at the
+    // rail's own icon-to-icon pitch so the gap matches the native spacing — and
+    // centered on the same column so it lines up horizontally. Reels feed only,
+    // and only while the rail is actually mounted; otherwise hidden. Half of the
+    // 28px icon (14px) maps our icon's CENTER to the computed target, since the
+    // toggle is a top-anchored column with the icon first.
+    const AUTO_ICON_HALF = 14;
+    function updateAutoTogglePosition(videoRect) {
+      if (!isReelsFeedPage()) { autoToggle.style.display = "none"; return; }
+      // A skipped promoted reel is blanked via visibility:hidden on its
+      // container (hidePromotedReel) for the brief beat before we scroll past.
+      // visibility:hidden PRESERVES layout, so the rail still lays out and we'd
+      // otherwise keep the toggle floating over the blanked ad while everything
+      // else is gone. The video inherits that hidden visibility — key off it.
+      if (getComputedStyle(video).visibility === "hidden") {
+        autoToggle.style.display = "none";
+        return;
+      }
+      const icons = getReelRailIcons(video);
+      const like = icons.find((i) => i.label === "Like" || i.label === "Unlike");
+      if (!like) { autoToggle.style.display = "none"; return; }
+      // Pitch from the live rail; fall back to a typical reel spacing if we
+      // can't measure (e.g. only the heart is mounted for a beat).
+      const pitch = railIconPitch(icons) || 56;
+      const targetIconCenterY = like.cy - pitch;
+      autoToggle.style.left = `${like.cx - videoRect.left}px`;
+      autoToggle.style.top = `${targetIconCenterY - AUTO_ICON_HALF - videoRect.top}px`;
+      autoToggle.style.display = "flex";
+      maybeSyncAutoLabelFont(like.svg);
+      maybeSyncAutoHover(like.svg);
+    }
+
+    // Auto-advance trigger — mirror the promoted-skip lifecycle: a per-play
+    // latch (re-armed on activation) so we advance exactly once, just as the
+    // reel finishes its first play. Gated to the centered reel so a background
+    // pooled <video> can't advance the feed. skipReel("down") reuses the same
+    // three fallback strategies as the ad-skip, so it works headlessly too.
+    let autoAdvanceLatched = false;
+    function onAutoAdvanceTimeupdate() {
+      if (!autoAdvanceEnabled || autoAdvanceLatched) return;
+      if (!isReelsFeedPage()) return;
+      const dur = video.duration;
+      if (!isFinite(dur) || dur <= 0) return;
+      if (dur - video.currentTime > AUTO_ADVANCE_LEAD_S) return;
+      const rect = video.getBoundingClientRect();
+      const mid = window.innerHeight / 2;
+      if (rect.top > mid || rect.bottom < mid) return; // not the active reel
+      autoAdvanceLatched = true;
+      dlog("[Maestro] auto-advance: reel finished one play → next reel", video);
+      skipReel("down");
+    }
+    function onAutoAdvanceReset() { autoAdvanceLatched = false; }
+    video.addEventListener("timeupdate", onAutoAdvanceTimeupdate);
+    video.addEventListener("play", onAutoAdvanceReset);
+    video.addEventListener("loadstart", onAutoAdvanceReset);
+    video.addEventListener("emptied", onAutoAdvanceReset);
 
     // Scrubber wiring — mobile-IG-style draggable progress bar.
     const scrubber = shadow.querySelector(".scrubber");
@@ -1849,6 +2230,11 @@
       cleanup() {
         alive = false;
         if (promotedSkipTeardown) promotedSkipTeardown();
+        autoAdvanceListeners.delete(renderAutoToggle);
+        video.removeEventListener("timeupdate", onAutoAdvanceTimeupdate);
+        video.removeEventListener("play", onAutoAdvanceReset);
+        video.removeEventListener("loadstart", onAutoAdvanceReset);
+        video.removeEventListener("emptied", onAutoAdvanceReset);
         if (boostHoldTimer) clearTimeout(boostHoldTimer);
         if (skipBadgeTimer) clearTimeout(skipBadgeTimer);
         if (reverseHandle) {
