@@ -45,6 +45,20 @@ Shortcuts always target whichever video is closest to the center of
 your screen. They're off while you're typing in a DM, comment, or
 search bar, so they won't get in your way.
 
+### Good to know: Instagram's own shortcuts
+
+These aren't Maestro's — they're Instagram's own built-in web shortcuts.
+Worth knowing, and Maestro's keys above are picked so they don't clash:
+
+| Key | What it does |
+|---|---|
+| `L` | Like the post / reel / story you're on |
+| `N` | Open notifications |
+| `/` | Jump to the search box |
+
+Instagram has a few more built in; these are just the handy ones. None of
+them overlap with Maestro's shortcuts, so they keep working right alongside it.
+
 ## How to install it
 
 Maestro isn't on the Chrome Web Store yet, so you'll load it
