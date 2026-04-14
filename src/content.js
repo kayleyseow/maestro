@@ -2430,6 +2430,7 @@
   //   U / I              cycle speed preset down/up
   //   M                  mute / unmute (we claim the key from IG's native M)
   //   R                  reset speed to 1×
+  //   A                  toggle auto-advance (Reels feed only)
   const KEY_HOLD_THRESHOLD_MS = 250;
   let activeKeyHold = null;
 
@@ -2534,6 +2535,16 @@
         break;
       }
       case "r": e.preventDefault(); handle.resetSpeed(); break;
+      // Auto-advance toggle (Reels only). Flips the same global setting as the
+      // rail button, so the visible toggle re-renders + pops. Claim the key from
+      // IG only when we actually act (on the Reels feed); elsewhere leave A be.
+      case "a":
+        if (!isReelsFeedPage()) break;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setAutoAdvance(!autoAdvanceEnabled);
+        dlog("[Maestro] auto-advance toggled via A →", autoAdvanceEnabled ? "ON" : "OFF");
+        break;
     }
   }
 

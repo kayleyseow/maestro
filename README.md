@@ -23,6 +23,9 @@ locally in your browser, so none of your data goes anywhere.
   thumbnail too; flip `SHOW_FRAME_PREVIEW = true` in `src/content.js`
   if you want to play with it.
 - **Promoted reels skip themselves** on the Reels feed.
+- **Auto-advance toggle** on Reels — the play/"auto" button above the
+  like icon. Switch it on and each reel jumps to the next once it
+  finishes playing once, instead of looping. Press `A` to toggle it too.
 
 While you're boosting or drag-scrubbing, IG's caption / username /
 mute / follow chrome fades out of the way so you can actually see
@@ -40,6 +43,7 @@ the video.
 | `U` / `I` | Step speed down / up through the presets |
 | `M` | Mute / unmute |
 | `R` | Reset speed back to 1× |
+| `A` | Toggle auto-advance, Reels only (same as the rail button) |
 
 Shortcuts always target whichever video is closest to the center of
 your screen. They're off while you're typing in a DM, comment, or
