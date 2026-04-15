@@ -41,7 +41,8 @@ the video.
 | `K` (hold) | 2× forward boost while you hold |
 | `Shift+J` / `Shift+K` | Skip ±10 s |
 | `U` / `I` | Step speed down / up through the presets |
-| `M` | Mute / unmute |
+| `M` | Open Instagram messages (DMs) |
+| `O` | Mute / unmute |
 | `R` | Reset speed back to 1× |
 | `A` | Toggle auto-advance, Reels only (same as the rail button) |
 

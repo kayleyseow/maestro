@@ -2428,7 +2428,8 @@
   //   J / K              tap = skip ±5s, hold = 2× reverse / forward boost
   //   Shift+J / Shift+K  skip ±10s
   //   U / I              cycle speed preset down/up
-  //   M                  mute / unmute (we claim the key from IG's native M)
+  //   M                  open Instagram messages (claims the key from IG's M)
+  //   O                  mute / unmute
   //   R                  reset speed to 1×
   //   A                  toggle auto-advance (Reels feed only)
   const KEY_HOLD_THRESHOLD_MS = 250;
@@ -2458,6 +2459,28 @@
     return best;
   }
 
+  // Open Instagram's DM inbox. Prefer clicking IG's own messages nav link so it
+  // stays an SPA navigation (app state preserved); the link is the nav anchor to
+  // /direct/inbox/. Fall back to the messages nav icon by aria-label (locale
+  // varies — "Messenger" / "Direct"), then to a plain navigation if neither is
+  // mounted (e.g. a collapsed nav).
+  function openIGMessages() {
+    let link = document.querySelector('a[href="/direct/inbox/"]');
+    if (!link) {
+      const icon = document.querySelector(
+        'svg[aria-label="Messenger" i], svg[aria-label*="Direct" i]'
+      );
+      if (icon) link = icon.closest('a, [role="link"], [role="button"]');
+    }
+    if (link) {
+      link.click();
+      dlog("[Maestro] M → opened messages via IG nav", link);
+      return;
+    }
+    dlog("[Maestro] M → no nav link found; navigating to /direct/inbox/");
+    location.assign("/direct/inbox/");
+  }
+
   function onMaestroKeyDown(e) {
     // Per-press M diagnostics: logs every M keydown that reaches us, plus the
     // state of each guard, so the console shows whether the key was received
@@ -2478,12 +2501,24 @@
     if (e.repeat) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (isTypingInInput()) return;
+
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+    // M → open Instagram messages. Global: works anywhere on IG, so it doesn't
+    // need a target video — handled before the video gate. Claim the key so
+    // IG's native M (mute) can't also fire.
+    if (k === "m") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      openIGMessages();
+      return;
+    }
+
     const video = findKeyboardTargetVideo();
     if (!video) return;
     const handle = uiByVideo.get(video);
     if (!handle) return;
 
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     switch (k) {
       // Speed preset cycle down / up. e.key (the letter) is fine here —
       // unlike the old , / . binding there's no layout-specific punctuation.
@@ -2516,21 +2551,21 @@
           }, KEY_HOLD_THRESHOLD_MS),
         };
         break;
-      // Mute toggle. CLICK IG's own mute button so IG flips its state AND its
-      // speaker icon (writing video.muted directly mutes audio but leaves IG's
-      // glyph stale). We still claim the key (stopImmediatePropagation) so IG's
-      // native M can't fire too and double-toggle. Fall back to a direct mute
-      // if the button isn't in the DOM.
-      case "m": {
+      // Mute toggle — moved off M (which now opens messages). CLICK IG's own
+      // mute button so IG flips its state AND its speaker icon (writing
+      // video.muted directly mutes audio but leaves IG's glyph stale). Claim the
+      // key so nothing else fires. Fall back to a direct mute if the button
+      // isn't in the DOM.
+      case "o": {
         e.preventDefault();
         e.stopImmediatePropagation();
         const muteBtn = findIGMuteButton(video);
         if (muteBtn) {
           muteBtn.click();
-          dlog("[Maestro] mute via M → clicked IG audio button", muteBtn);
+          dlog("[Maestro] mute via O → clicked IG audio button", muteBtn);
         } else {
           video.muted = !video.muted;
-          dlog("[Maestro] mute via M → no IG button found; set video.muted =", video.muted);
+          dlog("[Maestro] mute via O → no IG button found; set video.muted =", video.muted);
         }
         break;
       }
@@ -2550,9 +2585,9 @@
 
   function onMaestroKeyUp(e) {
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    // We claim M on keydown; swallow its keyup too so IG's native mute can't
-    // fire on release (IG binds one phase or the other — this covers both).
-    if (k === "m" && !isTypingInInput() && findKeyboardTargetVideo()) {
+    // We claim M on keydown (to open messages); swallow its keyup too so IG's
+    // native mute can't fire on release (IG binds one phase or the other).
+    if (k === "m" && !isTypingInInput()) {
       dlog("[Maestro] M keyup swallowed (blocking IG's native mute on release)");
       e.preventDefault();
       e.stopImmediatePropagation();
