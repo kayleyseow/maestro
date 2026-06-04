@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Maestro",
   "version": "0.1.0",
-  "description": "Premium playback controls for Instagram videos — speed, scrubber, volume, and more.",
+  "description": "Premium playback controls for Instagram videos — speed, scrubber, skip, boost, and more.",
   "content_scripts": [
     {
       "matches": [

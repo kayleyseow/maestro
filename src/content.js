@@ -187,6 +187,30 @@
   // WeakMap lets detached <video>s be GC'd if untrack ever misses one.
   const uiByVideo = new WeakMap();
 
+  // Instagram now ships its own volume control, so Maestro no longer mounts
+  // one — but we still have to keep our hands off it. IG wraps the whole
+  // control (the mute button AND the slider that slides up from it) in a
+  // single [role="slider"][aria-label="Adjust volume"] element; the mute
+  // button is a descendant [role="button"] holding <svg aria-label="Audio
+  // is …">, and the slide-up track/fill/thumb are its other descendants.
+  //
+  // That control can sit inside our left/right tap-zone (e.g. pinned against
+  // the left margin), where mountSpeedUI's window-capture zone handler would
+  // otherwise steal the hover/drag and fire a skip/boost. isPressOnIGVolumeControl
+  // walks the live hit-stack under the press: if any element resolves into
+  // IG's volume control we step aside. Testing the live stack makes it
+  // self-correcting — when the slider is collapsed only the button is there;
+  // when it's revealed the slid-up track is too. Keying off the aria-label
+  // matches how we detect the rest of IG's chrome (the x*-classes are
+  // obfuscated and unstable).
+  const IG_VOLUME_SELECTOR = '[role="slider"][aria-label="Adjust volume"]';
+  function isPressOnIGVolumeControl(x, y) {
+    for (const el of document.elementsFromPoint(x, y)) {
+      if (el.closest && el.closest(IG_VOLUME_SELECTOR)) return true;
+    }
+    return false;
+  }
+
   // Injected page-level stylesheet — used to hide IG's chrome (account info,
   // follow button, caption, mute) during a 2× boost. Lives outside our shadow
   // DOM because the elements we tag belong to IG, not us.
@@ -955,6 +979,15 @@
           "zoneR:", zoneRight.getBoundingClientRect(),
           "videoRect:", rect
         );
+        return;
+      }
+
+      // Step aside for IG's own volume control (the mute button + the slider
+      // that slides up from it). It can sit against the left/right margin,
+      // inside this zone — without this its hover/drag gets stolen and we'd
+      // fire a skip/boost instead of letting the user set the volume.
+      if (isPressOnIGVolumeControl(e.clientX, e.clientY)) {
+        dlog("[Maestro debug] pointerdown REJECTED — on IG volume control");
         return;
       }
 

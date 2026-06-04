@@ -6,7 +6,7 @@ been missing — speed, scrubbing, skip, and boost. Everything runs
 locally in your browser, so none of your data goes anywhere.
 
 **Where it works:** feed posts, Reels, and post-detail pages
-(`/p/<id>/`). Stories are skipped on purpose.
+(`/p/<id>/`). Stories are intentionally left alone.
 
 ## What it does
 
